@@ -1,0 +1,5 @@
+.gradle/
+build/
+*.class
+config.properties
+message-id.txt

@@ -1,0 +1,26 @@
+name: Build CuboriaStatus
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+      - name: Build shaded plugin JAR
+        run: gradle clean shadowJar --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CuboriaStatus-plugin-JAR
+          path: build/libs/*.jar
+          if-no-files-found: error

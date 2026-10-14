@@ -1,0 +1,27 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '8.3.6'
+}
+
+group = 'net.cuboria'
+version = '0.2.1'
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+
+dependencies {
+    compileOnly 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
+    annotationProcessor 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
+    implementation 'com.google.code.gson:gson:2.11.0'
+}
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+shadowJar {
+    archiveClassifier.set('')
+    relocate 'com.google.gson', 'net.cuboria.status.libs.gson'
+}
+assemble.dependsOn shadowJar
