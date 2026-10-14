@@ -25,7 +25,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
-@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.3.0", authors = {"Cuboria"})
+@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.4.0", authors = {"Cuboria"})
 public final class CuboriaStatus {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -111,7 +111,7 @@ public final class CuboriaStatus {
 
     private byte[] render(List<ServerStat> servers, int total) {
         final int w = 1200;
-        final int h = 480 + servers.size() * 68;
+        final int h = 554 + servers.size() * 76;
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -133,11 +133,22 @@ public final class CuboriaStatus {
         g.setColor(hex("#0873E4")); g.setStroke(new BasicStroke(1.6f));
         g.drawRoundRect(36, 30, w - 72, h - 60, 26, 26);
 
-        // Dark voxel landscape is decoration only; the live figures are always drawn in Java.
+        // Fade the decorative landscape in horizontally to avoid a visible rectangular edge.
         try (InputStream is = getClass().getResourceAsStream("/header-landscape.png")) {
             if (is != null) {
                 BufferedImage landscape = ImageIO.read(is);
-                if (landscape != null) g.drawImage(landscape, 580, 34, 570, 141, null);
+                if (landscape != null) {
+                    java.awt.Composite previous = g.getComposite();
+                    for (int dx = 0; dx < 640; dx += 4) {
+                        float edge = Math.min(1f, Math.min(dx / 180f, (640 - dx) / 50f));
+                        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.25f * Math.max(0f, edge)));
+                        int sx = (int) ((dx / 640.0) * landscape.getWidth());
+                        int sw = Math.max(1, (int) Math.ceil(4 * landscape.getWidth() / 640.0));
+                        g.drawImage(landscape, 490 + dx, 34, 490 + dx + 4, 170,
+                                sx, 0, Math.min(landscape.getWidth(), sx + sw), landscape.getHeight(), null);
+                    }
+                    g.setComposite(previous);
+                }
             }
         } catch (IOException ignored) { }
 
@@ -146,7 +157,7 @@ public final class CuboriaStatus {
         try (InputStream is = getClass().getResourceAsStream("/cuboria-logo.png")) {
             if (is != null) {
                 BufferedImage logo = ImageIO.read(is);
-                if (logo != null) g.drawImage(logo, 73, 64, 84, 84, null);
+                if (logo != null) g.drawImage(logo, 67, 58, 96, 96, null);
             }
         } catch (IOException ignored) { }
         g.setStroke(new BasicStroke(2)); g.setColor(blue);
@@ -168,71 +179,71 @@ public final class CuboriaStatus {
         g.setFont(new Font("SansSerif", Font.BOLD, 18)); g.drawString(overall, 1016, 108);
 
         // Summary card
-        fillRound(g, 60, 186, 1080, 118, 16, panel);
-        thinOutline(g, 60, 186, 1080, 118, 16);
-        g.setColor(hex("#243957")); g.drawLine(603, 209, 603, 280);
-        fillRound(g, 83, 208, 75, 75, 15, hex("#102B58"));
-        people(g, 121, 245, blue);
+        fillRound(g, 60, 193, 1080, 136, 18, panel);
+        thinOutline(g, 60, 193, 1080, 136, 18);
+        g.setColor(hex("#243957")); g.drawLine(603, 218, 603, 304);
+        fillRound(g, 83, 223, 82, 82, 17, hex("#102B58"));
+        people(g, 124, 263, blue);
         g.setFont(new Font("SansSerif", Font.PLAIN, 18)); g.setColor(muted);
-        g.drawString("Total Players", 177, 237);
+        g.drawString("Total Players", 184, 254);
         g.setFont(new Font("SansSerif", Font.BOLD, 34)); g.setColor(white);
         String onlineText = Integer.toString(total);
-        g.drawString(onlineText, 176, 274);
+        g.drawString(onlineText, 184, 297);
         int max = maxPlayers("network.max-players", 10000);
         g.setFont(new Font("SansSerif", Font.BOLD, 29)); g.setColor(hex("#93ADD8"));
-        g.drawString("/ " + max, 189 + textWidth(g, onlineText, new Font("SansSerif", Font.BOLD, 34)), 273);
-        fillRound(g, 635, 208, 75, 75, 15, hex("#06332F"));
+        g.drawString("/ " + max, 197 + textWidth(g, onlineText, new Font("SansSerif", Font.BOLD, 34)), 296);
+        fillRound(g, 635, 223, 82, 82, 17, hex("#06332F"));
         g.setColor(status); g.setStroke(new BasicStroke(4));
-        g.drawOval(658, 230, 30, 30);
-        if (allOnline) { g.drawLine(665, 245, 673, 251); g.drawLine(673, 251, 685, 237); }
+        g.drawOval(660, 246, 32, 32);
+        if (allOnline) { g.drawLine(667, 262, 674, 269); g.drawLine(674, 269, 688, 252); }
         g.setColor(muted); g.setFont(new Font("SansSerif", Font.PLAIN, 18));
-        g.drawString("Network Status", 729, 237);
+        g.drawString("Network Status", 740, 254);
         g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 30));
-        g.drawString(allOnline ? "Operational" : (up == 0 ? "Unavailable" : "Partial Outage"), 729, 272);
+        g.drawString(allOnline ? "Operational" : (up == 0 ? "Unavailable" : "Partial Outage"), 740, 297);
 
         // Compact two-server section, automatically sized if more backends are configured.
-        final int boxY = 320;
-        final int boxH = 57 + servers.size() * 68;
+        final int boxY = 348;
+        final int boxH = 67 + servers.size() * 76;
         fillRound(g, 60, boxY, 1080, boxH, 16, panel);
         thinOutline(g, 60, boxY, 1080, boxH, 16);
         g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 24));
-        g.drawString("Servers", 82, boxY + 35);
+        g.drawString("Servers", 86, boxY + 39);
         g.setColor(muted); g.setFont(new Font("SansSerif", Font.BOLD, 12));
-        right(g, "PLAYERS          PROXY PING", 1115, boxY + 34);
+        right(g, "PLAYERS                         PROXY PING", 1105, boxY + 37);
         for (int i = 0; i < servers.size(); i++) {
             ServerStat s = servers.get(i);
-            int y = boxY + 47 + i * 68;
-            fillRound(g, 78, y, 1044, 60, 12, row);
-            thinOutline(g, 78, y, 1044, 60, 12);
+            int y = boxY + 57 + i * 76;
+            fillRound(g, 78, y, 1044, 66, 13, row);
+            thinOutline(g, 78, y, 1044, 66, 13);
             g.setColor(s.online ? green : red);
-            g.fillOval(101, y + 23, 14, 14);
+            g.fillOval(102, y + 26, 14, 14);
             g.setFont(new Font("SansSerif", Font.BOLD, 21)); g.setColor(white);
             String name = s.name();
-            if (name.equalsIgnoreCase("OneBlock")) drawBlock(g, 129, y + 15);
-            else if (name.equalsIgnoreCase("Arcade")) drawSword(g, 129, y + 12);
-            else drawServer(g, 129, y + 15);
-            g.drawString(name, 171, y + 37);
+            String icon = name.equalsIgnoreCase("OneBlock") ? "/oneblock-icon.png" :
+                    name.equalsIgnoreCase("Arcade") ? "/arcade-icon.png" : null;
+            if (icon == null || !drawIcon(g, icon, 126, y + 9, 48)) drawServer(g, 137, y + 18);
+            g.drawString(name, 193, y + 43);
             g.setFont(new Font("SansSerif", Font.BOLD, 20));
             g.setColor(white);
             String playerCount = s.players + " / " + maxPlayers("server." + serverIdForName(s.name) + ".max-players", max);
-            right(g, playerCount, 907, y + 37);
+            right(g, playerCount, 905, y + 43);
             g.setColor(s.online ? (s.pingMs < 80 ? green : hex("#F9C75E")) : red);
-            right(g, s.online ? (s.pingMs + " ms") : "Offline", 1097, y + 37);
+            right(g, s.online ? (s.pingMs + " ms") : "Offline", 1095, y + 43);
         }
-        int footerY = boxY + boxH + 19;
+        int footerY = boxY + boxH + 24;
         g.setColor(hex("#2C4263")); g.setStroke(new BasicStroke(1));
         g.drawLine(62, footerY, 1138, footerY);
         g.setFont(new Font("SansSerif", Font.BOLD, 12)); g.setColor(muted);
-        g.drawString("SERVER ADDRESS", 112, footerY + 29);
+        g.drawString("SERVER ADDRESS", 121, footerY + 30);
         g.setFont(new Font("SansSerif", Font.BOLD, 21)); g.setColor(white);
-        g.drawString(config.getProperty("network.address", "play.cuborianetwork.net"), 112, footerY + 54);
+        g.drawString(config.getProperty("network.address", "play.cuborianetwork.net"), 121, footerY + 60);
         g.setColor(blue); g.setStroke(new BasicStroke(4));
-        g.drawRoundRect(79, footerY + 29, 23, 17, 7, 7);
-        fillRound(g, 929, footerY + 22, 194, 37, 18, hex("#0D2140"));
+        g.drawRoundRect(82, footerY + 37, 25, 18, 7, 7);
+        fillRound(g, 904, footerY + 27, 218, 42, 20, hex("#0D2140"));
         g.setColor(hex("#2574C8")); g.setStroke(new BasicStroke(1));
-        g.drawRoundRect(929, footerY + 22, 194, 37, 18, 18);
+        g.drawRoundRect(904, footerY + 27, 218, 42, 20, 20);
         g.setFont(new Font("SansSerif", Font.PLAIN, 15)); g.setColor(white);
-        g.drawString("Updates every " + Math.max(15, Integer.parseInt(config.getProperty("update.seconds", "30"))) + "s", 946, footerY + 46);
+        g.drawString("Updates every " + Math.max(15, Integer.parseInt(config.getProperty("update.seconds", "30"))) + "s", 925, footerY + 54);
         g.dispose();
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             if (!ImageIO.write(img, "png", out)) throw new IOException("No PNG writer available");
@@ -273,6 +284,16 @@ public final class CuboriaStatus {
         g.fillRoundRect(x - 13, y - 2, 26, 22, 8, 8);
         g.fillRoundRect(x - 32, y + 1, 16, 17, 6, 6); g.fillRoundRect(x + 16, y + 1, 16, 17, 6, 6);
     }
+    private boolean drawIcon(Graphics2D g, String path, int x, int y, int size) {
+        try (InputStream is = getClass().getResourceAsStream(path)) {
+            if (is == null) return false;
+            BufferedImage icon = ImageIO.read(is);
+            if (icon == null) return false;
+            g.drawImage(icon, x, y, size, size, null);
+            return true;
+        } catch (IOException e) { return false; }
+    }
+
     private static void drawBlock(Graphics2D g, int x, int y) {
         g.setColor(hex("#7AC850")); g.fillRect(x, y, 30, 12);
         g.setColor(hex("#8A5E36")); g.fillRect(x, y + 12, 30, 22);

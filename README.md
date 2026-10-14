@@ -1,23 +1,22 @@
-# CuboriaStatus v0.3 — Discord dashboard
+# CuboriaStatus v0.4 — refined dashboard
 
-Custom Velocity status dashboard using the Cuboria logo and a neon-blue renderer. Shows live proxy total, per-backend connected players, backend reachability, and proxy-to-backend ping.
+This is the full Java/Gradle source project, not a compiled JAR.
 
-## Build
+## What changed
+- More vertical room: corrected footer clipping and separated sections
+- Landscape softly blended into header rather than a hard-edged rectangle
+- Sharper server icons loaded from PNG resources
+- Preserves OneBlock/Arcade live players, backend ping, outage state, Discord message updating
+- Shows configured display maxima of 10,000 for network and each backend
 
-Upload **the contents** of this project directory (preserving paths) into your GitHub repository. In Actions, run **Build CuboriaStatus**. Download `CuboriaStatus-plugin-JAR` from the successful run and extract the JAR.
+## Build using GitHub Actions
+Upload the **contents** of this project folder to the root of the GitHub repository, preserving `src/main/java/` and `src/main/resources/` paths. Select **Actions -> Build CuboriaStatus -> Run workflow**. Download the plugin JAR from the run's Artifacts.
 
-## Install
+## Deploy
+1. Back up your current JAR and `plugins/cuboriastatus/config.properties`.
+2. Stop Velocity and replace the CuboriaStatus JAR with the new build.
+3. Start Velocity. Existing `config.properties` is preserved, not overwritten. Set `servers=oneblock,arcade`, all player maxima to `10000` and `update.seconds=30` in that config.
+4. Do not commit the bot token to GitHub. Keep it in the private Velocity config only.
+5. Watch console for plugin or Discord errors.
 
-1. Stop Velocity. Replace the prior `cuboriastatus` JAR in `plugins/` with v0.3.
-2. The config is stored in `plugins/cuboriastatus/config.properties`. **If this file already exists, the JAR does not overwrite it.** Edit your existing file by hand.
-3. Set `servers=oneblock,arcade`, `network.max-players=10000`, `server.oneblock.max-players=10000`, `server.arcade.max-players=10000`, and optionally `network.address=play.cuborianetwork.net`.
-4. Keep your valid `discord.token` and `discord.channel-id` on the server (not GitHub).
-5. Start Velocity; the same Discord message will update on the configured interval.
-
-## Important
-
-All figures for players and ping are measured live. The 10,000 capacities are **display-only**; these values do not enforce player limits. The Velocity proxy's `show-max-players` option is also primarily a displayed maximum.
-
-The design is **code-rendered**, not a static screenshot. Brand logo and a small header landscape are included under `src/main/resources/`.
-
-The proxy must be running for the bot to refresh Discord. A separate external monitor would be required to reliably show a proxy-down status while the proxy itself is offline.
+**Notes:** This source was not compiled in this environment. It is intended for the successful GitHub Actions build used previously. Proxy-to-backend pings are not individual player latency. If Velocity stops, this plugin cannot refresh the Discord message until it restarts. The 10,000 figure is dashboard display capacity, not an enforced player limit.
