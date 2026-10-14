@@ -25,7 +25,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
-@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.2.1", authors = {"Cuboria"})
+@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.3.0", authors = {"Cuboria"})
 public final class CuboriaStatus {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -79,7 +79,7 @@ public final class CuboriaStatus {
             updating.set(false);
             return;
         }
-        List<String> ids = Arrays.stream(config.getProperty("servers", "hub,oneblock,arcade").split(","))
+        List<String> ids = Arrays.stream(config.getProperty("servers", "oneblock,arcade").split(","))
                 .map(String::trim).filter(s -> !s.isEmpty()).toList();
         List<CompletableFuture<ServerStat>> checks = new ArrayList<>();
         for (String id : ids) {
@@ -110,71 +110,185 @@ public final class CuboriaStatus {
     }
 
     private byte[] render(List<ServerStat> servers, int total) {
-        final int w = 1000, h = 355 + servers.size() * 83;
+        final int w = 1200;
+        final int h = 480 + servers.size() * 68;
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        Color bg = new Color(11, 16, 25), card = new Color(21, 30, 44);
-        Color white = new Color(243, 247, 252), muted = new Color(144, 164, 186);
-        Color blue = new Color(55, 191, 227), green = new Color(74, 222, 128), red = new Color(248, 113, 113);
-        g.setColor(bg); g.fillRect(0, 0, w, h);
-        g.setColor(blue); g.fillRoundRect(37, 35, 9, 61, 5, 5);
-        g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 29));
-        g.drawString(config.getProperty("dashboard.title", "CUBORIA NETWORK"), 66, 61);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 16)); g.setColor(muted);
-        g.drawString(config.getProperty("dashboard.subtitle", "Live Minecraft Server Status"), 67, 89);
-        boolean allOnline = servers.stream().allMatch(ServerStat::online);
-        String networkStatus = allOnline ? "ALL SYSTEMS ONLINE" : "CHECK SERVER STATUS";
-        g.setFont(new Font("SansSerif", Font.BOLD, 16)); g.setColor(allOnline ? green : red);
-        right(g, networkStatus, w - 43, 68);
-        line(g, 115, w);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        Color bg = hex("#06101F"), panel = hex("#08162A"), row = hex("#08182E");
+        Color white = hex("#F7FAFF"), muted = hex("#9AAECA"), blue = hex("#31BEF5");
+        Color green = hex("#17E69A"), red = hex("#F15C76");
 
-        g.setFont(new Font("SansSerif", Font.BOLD, 14)); g.setColor(muted);
-        g.drawString("TOTAL PLAYERS", 45, 159);
-        g.drawString("SERVERS ONLINE", 530, 159);
-        g.setFont(new Font("SansSerif", Font.BOLD, 42)); g.setColor(white);
-        g.drawString(Integer.toString(total), 44, 210);
-        long online = servers.stream().filter(ServerStat::online).count();
-        g.drawString(online + " / " + servers.size(), 529, 210);
-        line(g, 240, w);
-        g.setFont(new Font("SansSerif", Font.BOLD, 17)); g.setColor(muted);
-        g.drawString("SERVERS", 45, 277);
-        right(g, "PLAYERS    /    PROXY PING", w - 45, 277);
-
-        int y = 295;
-        for (ServerStat s : servers) {
-            g.setColor(card); g.fillRoundRect(38, y, w - 76, 72, 16, 16);
-            g.setColor(s.online ? green : red); g.fillOval(59, y + 26, 14, 14);
-            g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 20));
-            g.drawString(s.name, 89, y + 31);
-            g.setColor(s.online ? green : red); g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-            g.drawString(s.online ? "Online" : "Unreachable", 89, y + 53);
-            g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 19));
-            right(g, s.players + " players", w - 294, y + 31);
-            g.setColor(s.online ? (s.pingMs < 80 ? green : new Color(251, 191, 36)) : red);
-            right(g, s.online ? s.pingMs + " ms" : "Offline", w - 63, y + 37);
-            y += 83;
+        g.setPaint(new GradientPaint(0, 0, hex("#04101F"), w, h, hex("#07142B")));
+        g.fillRect(0, 0, w, h);
+        // Soft blue exterior glow and main dashboard frame.
+        for (int i = 8; i >= 1; i--) {
+            g.setColor(new Color(0, 105, 255, 5));
+            g.setStroke(new BasicStroke(i * 2));
+            g.drawRoundRect(31, 26, w - 62, h - 52, 27, 27);
         }
-        line(g, h - 51, w);
-        g.setFont(new Font("SansSerif", Font.BOLD, 16)); g.setColor(white);
-        g.drawString(config.getProperty("network.address", "play.cuborianetwork.net"), 45, h - 20);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13)); g.setColor(muted);
-        right(g, "Updated " + java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"))
-                + " • proxy-to-backend latency", w - 45, h - 22);
+        fillRound(g, 36, 30, w - 72, h - 60, 26, bg);
+        g.setColor(hex("#0873E4")); g.setStroke(new BasicStroke(1.6f));
+        g.drawRoundRect(36, 30, w - 72, h - 60, 26, 26);
+
+        // Dark voxel landscape is decoration only; the live figures are always drawn in Java.
+        try (InputStream is = getClass().getResourceAsStream("/header-landscape.png")) {
+            if (is != null) {
+                BufferedImage landscape = ImageIO.read(is);
+                if (landscape != null) g.drawImage(landscape, 580, 34, 570, 141, null);
+            }
+        } catch (IOException ignored) { }
+
+        // Genuine Cuboria icon copied from user-supplied branding.
+        fillRound(g, 66, 58, 98, 98, 19, hex("#091C38"));
+        try (InputStream is = getClass().getResourceAsStream("/cuboria-logo.png")) {
+            if (is != null) {
+                BufferedImage logo = ImageIO.read(is);
+                if (logo != null) g.drawImage(logo, 73, 64, 84, 84, null);
+            }
+        } catch (IOException ignored) { }
+        g.setStroke(new BasicStroke(2)); g.setColor(blue);
+        g.drawRoundRect(66, 58, 98, 98, 19, 19);
+        g.setFont(new Font("SansSerif", Font.BOLD, 37));
+        g.setColor(white); g.drawString("CUBORIA", 188, 100);
+        g.setColor(hex("#39AFFF")); g.drawString("NETWORK", 392, 100);
+        g.setColor(muted); g.setFont(new Font("SansSerif", Font.PLAIN, 20));
+        g.drawString(config.getProperty("dashboard.subtitle", "Live Minecraft Server Status"), 190, 131);
+
+        long up = servers.stream().filter(ServerStat::online).count();
+        boolean allOnline = !servers.isEmpty() && up == servers.size();
+        String overall = allOnline ? "ONLINE" : (up == 0 ? "OFFLINE" : "DEGRADED");
+        Color status = allOnline ? green : (up == 0 ? red : hex("#FFB547"));
+        fillRound(g, 974, 79, 153, 46, 23, hex("#072721"));
+        g.setColor(status); g.setStroke(new BasicStroke(2));
+        g.drawRoundRect(974, 79, 153, 46, 23, 23);
+        g.fillOval(992, 95, 13, 13);
+        g.setFont(new Font("SansSerif", Font.BOLD, 18)); g.drawString(overall, 1016, 108);
+
+        // Summary card
+        fillRound(g, 60, 186, 1080, 118, 16, panel);
+        thinOutline(g, 60, 186, 1080, 118, 16);
+        g.setColor(hex("#243957")); g.drawLine(603, 209, 603, 280);
+        fillRound(g, 83, 208, 75, 75, 15, hex("#102B58"));
+        people(g, 121, 245, blue);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 18)); g.setColor(muted);
+        g.drawString("Total Players", 177, 237);
+        g.setFont(new Font("SansSerif", Font.BOLD, 34)); g.setColor(white);
+        String onlineText = Integer.toString(total);
+        g.drawString(onlineText, 176, 274);
+        int max = maxPlayers("network.max-players", 10000);
+        g.setFont(new Font("SansSerif", Font.BOLD, 29)); g.setColor(hex("#93ADD8"));
+        g.drawString("/ " + max, 189 + textWidth(g, onlineText, new Font("SansSerif", Font.BOLD, 34)), 273);
+        fillRound(g, 635, 208, 75, 75, 15, hex("#06332F"));
+        g.setColor(status); g.setStroke(new BasicStroke(4));
+        g.drawOval(658, 230, 30, 30);
+        if (allOnline) { g.drawLine(665, 245, 673, 251); g.drawLine(673, 251, 685, 237); }
+        g.setColor(muted); g.setFont(new Font("SansSerif", Font.PLAIN, 18));
+        g.drawString("Network Status", 729, 237);
+        g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 30));
+        g.drawString(allOnline ? "Operational" : (up == 0 ? "Unavailable" : "Partial Outage"), 729, 272);
+
+        // Compact two-server section, automatically sized if more backends are configured.
+        final int boxY = 320;
+        final int boxH = 57 + servers.size() * 68;
+        fillRound(g, 60, boxY, 1080, boxH, 16, panel);
+        thinOutline(g, 60, boxY, 1080, boxH, 16);
+        g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 24));
+        g.drawString("Servers", 82, boxY + 35);
+        g.setColor(muted); g.setFont(new Font("SansSerif", Font.BOLD, 12));
+        right(g, "PLAYERS          PROXY PING", 1115, boxY + 34);
+        for (int i = 0; i < servers.size(); i++) {
+            ServerStat s = servers.get(i);
+            int y = boxY + 47 + i * 68;
+            fillRound(g, 78, y, 1044, 60, 12, row);
+            thinOutline(g, 78, y, 1044, 60, 12);
+            g.setColor(s.online ? green : red);
+            g.fillOval(101, y + 23, 14, 14);
+            g.setFont(new Font("SansSerif", Font.BOLD, 21)); g.setColor(white);
+            String name = s.name();
+            if (name.equalsIgnoreCase("OneBlock")) drawBlock(g, 129, y + 15);
+            else if (name.equalsIgnoreCase("Arcade")) drawSword(g, 129, y + 12);
+            else drawServer(g, 129, y + 15);
+            g.drawString(name, 171, y + 37);
+            g.setFont(new Font("SansSerif", Font.BOLD, 20));
+            g.setColor(white);
+            String playerCount = s.players + " / " + maxPlayers("server." + serverIdForName(s.name) + ".max-players", max);
+            right(g, playerCount, 907, y + 37);
+            g.setColor(s.online ? (s.pingMs < 80 ? green : hex("#F9C75E")) : red);
+            right(g, s.online ? (s.pingMs + " ms") : "Offline", 1097, y + 37);
+        }
+        int footerY = boxY + boxH + 19;
+        g.setColor(hex("#2C4263")); g.setStroke(new BasicStroke(1));
+        g.drawLine(62, footerY, 1138, footerY);
+        g.setFont(new Font("SansSerif", Font.BOLD, 12)); g.setColor(muted);
+        g.drawString("SERVER ADDRESS", 112, footerY + 29);
+        g.setFont(new Font("SansSerif", Font.BOLD, 21)); g.setColor(white);
+        g.drawString(config.getProperty("network.address", "play.cuborianetwork.net"), 112, footerY + 54);
+        g.setColor(blue); g.setStroke(new BasicStroke(4));
+        g.drawRoundRect(79, footerY + 29, 23, 17, 7, 7);
+        fillRound(g, 929, footerY + 22, 194, 37, 18, hex("#0D2140"));
+        g.setColor(hex("#2574C8")); g.setStroke(new BasicStroke(1));
+        g.drawRoundRect(929, footerY + 22, 194, 37, 18, 18);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 15)); g.setColor(white);
+        g.drawString("Updates every " + Math.max(15, Integer.parseInt(config.getProperty("update.seconds", "30"))) + "s", 946, footerY + 46);
         g.dispose();
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            if (!ImageIO.write(img, "png", out)) throw new IOException("No PNG image writer available");
+            if (!ImageIO.write(img, "png", out)) throw new IOException("No PNG writer available");
             return out.toByteArray();
-        } catch (IOException e) { throw new CompletionException(e); }
+        } catch (IOException ex) { throw new CompletionException(ex); }
     }
 
-    private static void right(Graphics2D g, String text, int right, int baseline) {
-        g.drawString(text, right - g.getFontMetrics().stringWidth(text), baseline);
+    private int maxPlayers(String key, int fallback) {
+        try { return Math.max(1, Integer.parseInt(config.getProperty(key, String.valueOf(fallback)))); }
+        catch (NumberFormatException ex) { return fallback; }
     }
 
-    private static void line(Graphics2D g, int y, int w) {
-        g.setColor(new Color(39, 50, 68)); g.drawLine(38, y, w - 38, y);
+    private String serverIdForName(String display) {
+        for (String id : config.getProperty("servers", "oneblock,arcade").split(",")) {
+            id = id.trim();
+            if (config.getProperty("server." + id, id).equals(display)) return id;
+        }
+        return display.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static Color hex(String h) { return Color.decode(h); }
+    private static void fillRound(Graphics2D g, int x, int y, int w, int h, int r, Color color) {
+        g.setColor(color); g.fillRoundRect(x, y, w, h, r, r);
+    }
+    private static void thinOutline(Graphics2D g, int x, int y, int w, int h, int r) {
+        g.setColor(new Color(30, 75, 139, 160)); g.setStroke(new BasicStroke(1));
+        g.drawRoundRect(x, y, w, h, r, r);
+    }
+    private static void right(Graphics2D g, String text, int x, int baseline) {
+        g.drawString(text, x - g.getFontMetrics().stringWidth(text), baseline);
+    }
+    private static int textWidth(Graphics2D g, String text, Font font) {
+        return g.getFontMetrics(font).stringWidth(text);
+    }
+    private static void people(Graphics2D g, int x, int y, Color color) {
+        g.setColor(color);
+        g.fillOval(x - 8, y - 20, 16, 16); g.fillOval(x - 28, y - 15, 12, 12); g.fillOval(x + 16, y - 15, 12, 12);
+        g.fillRoundRect(x - 13, y - 2, 26, 22, 8, 8);
+        g.fillRoundRect(x - 32, y + 1, 16, 17, 6, 6); g.fillRoundRect(x + 16, y + 1, 16, 17, 6, 6);
+    }
+    private static void drawBlock(Graphics2D g, int x, int y) {
+        g.setColor(hex("#7AC850")); g.fillRect(x, y, 30, 12);
+        g.setColor(hex("#8A5E36")); g.fillRect(x, y + 12, 30, 22);
+        g.setColor(hex("#6B4629")); g.fillRect(x + 18, y + 12, 12, 22);
+        g.setColor(hex("#A7E06C")); g.fillRect(x + 4, y + 3, 10, 4);
+    }
+    private static void drawSword(Graphics2D g, int x, int y) {
+        g.setColor(hex("#5FE8FA")); g.fillRect(x + 17, y, 9, 22);
+        g.setColor(hex("#1CA5DC")); g.fillRect(x + 10, y + 20, 22, 7);
+        g.setColor(hex("#B4CDFB")); g.fillRect(x + 19, y + 26, 6, 11);
+        g.setColor(hex("#26669E")); g.fillRect(x + 18, y + 2, 3, 17);
+    }
+    private static void drawServer(Graphics2D g, int x, int y) {
+        g.setColor(hex("#31BEF5")); g.fillRoundRect(x, y, 30, 26, 6, 6);
+        g.setColor(hex("#0B1B31")); g.fillRect(x + 4, y + 7, 22, 4);
+        g.fillRect(x + 4, y + 17, 22, 4);
     }
 
     private CompletableFuture<Void> publish(String token, String channel, byte[] png) {
