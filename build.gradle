@@ -1,27 +1,39 @@
-plugins {
-    id 'java'
-    id 'com.gradleup.shadow' version '8.3.6'
-}
 
-group = 'net.cuboria'
-version = '0.2.1'
+name: Build CuboriaStatus
 
-repositories {
-    mavenCentral()
-    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
-}
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
-dependencies {
-    compileOnly 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
-    annotationProcessor 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
-    implementation 'com.google.code.gson:gson:2.11.0'
-}
+jobs:
+  build:
+    runs-on: ubuntu-24.04
 
-java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
-shadowJar {
-    archiveClassifier.set('')
-    relocate 'com.google.gson', 'net.cuboria.status.libs.gson'
-}
-assemble.dependsOn shadowJar
+      - name: Setup Java 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build CuboriaStatus
+        run: gradle clean build --no-daemon
+
+      - name: Check JAR Output
+        run: ls -lah build/libs/
+
+      - name: Upload Plugin JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: CuboriaStatus-plugin-JAR
+          path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 30
