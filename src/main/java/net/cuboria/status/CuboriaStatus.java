@@ -38,7 +38,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.8.0", authors = {"Cuboria"})
+@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.9.0", authors = {"Cuboria"})
 public final class CuboriaStatus {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -69,7 +69,7 @@ public final class CuboriaStatus {
             }
             Path artDir=directory.resolve("assets");
             Files.createDirectories(artDir);
-            String[] arts={"background","logo","character-left","character-right","online","offline","players","network","header-title","header-players","header-ping","row","footer-address","footer-update","oneblock","arcade"};
+            String[] arts={"template-base","sign-online","sign-offline","font-atlas","background","logo","character-left","character-right","players","network","row","footer-address","footer-update","oneblock","arcade"};
             for(String name:arts){
                 Path target=artDir.resolve(name+".png");
                 if(Files.notExists(target))try(InputStream asset=getClass().getResourceAsStream("/dashboard-assets/"+name+".png")){
@@ -84,7 +84,7 @@ public final class CuboriaStatus {
                     .delay(5, TimeUnit.SECONDS)
                     .repeat(interval, TimeUnit.SECONDS)
                     .schedule();
-            logger.info("CuboriaStatus v0.8.0 started with independent artwork layers.");
+            logger.info("CuboriaStatus v0.9.0 started with independent artwork layers.");
         } catch (Exception ex) {
             logger.error("Unable to initialize CuboriaStatus", ex);
         }
@@ -145,73 +145,45 @@ public final class CuboriaStatus {
     // Every image is a separate PNG file, copied into plugins/cuboriastatus/assets.
     // Every slot can be repositioned with layout.<slot>.x/y/w/h in config.properties.
     private byte[] render(List<ServerStat> servers, int totalPlayers) {
-        final int W = 1672;
-        final int H = 941;
-        BufferedImage image = new BufferedImage(W,H,BufferedImage.TYPE_INT_RGB);
+        final int W = 1672, H = 941;
+        BufferedImage image = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        g.setColor(Color.decode("#071327"));g.fillRect(0,0,W,H);
-        place(g,"background",0,0,W,H);
-        // Do not dim background with a dark full-canvas overlay.
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        place(g, "template-base", 0, 0, W, H);
 
-        long up = servers.stream().filter(ServerStat::online).count();
-        String status = up > 0 ? "ONLINE" : "OFFLINE";
-        Color signal = status.equals("ONLINE") ? Color.decode("#31F28D") : Color.decode("#FF6276");
-        String state = status.equals("ONLINE") ? "Operational" : "Offline";
-
-        // Header layers (never flatten into the underlying background).
-        place(g,"logo",200,40,780,265);
-        place(g,"character-left",44,135,178,178);
-        place(g,"character-right",1140,189,197,148);
-        place(g,status.toLowerCase(java.util.Locale.ROOT),1294,85,335,174);
-        // Draw the state word over the sign to avoid a misleading static ONLINE label.
-        // A panel inset covers the old green label and uses the same pixel font for all states.
-        // Disabled by default for ONLINE, whose source artwork already contains the correct word.
-        if (!status.equals("ONLINE")) {
-            g.setColor(new Color(74,21,33,245));
-            g.fillRoundRect(1436,162,160,45,8,8);
-            drawPixelText(g,status,1444,172,4,signal,Color.decode("#081021"),1);
+        long connected = servers.stream().filter(ServerStat::online).count();
+        boolean online = connected > 0;
+        Color statusColor = online ? Color.decode("#31F28D") : Color.decode("#FF6A79");
+        String sign = online ? "sign-online" : "sign-offline";
+        place(g, sign, 1319, 157, 290, 111);
+        if (!online) {
+            // The offline overlay changes the state label without altering its frame.
+            g.setColor(new Color(38, 11, 21));
+            g.fillRect(1392, 184, 192, 49);
+            drawAtlas(g, "OFFLINE", 1408, 188, 30, 175, statusColor);
         }
-        place(g,"players",66,310,734,228);
-        place(g,"network",852,310,754,228);
-        liveText(g,"total",totalPlayers+" / "+maxPlayers("network.max-players",10000),282,440,5,Color.decode("#F4F8FF"));
-        liveText(g,"network-state",state,1093,440,5,signal);
 
-        // Keep headings as live text rather than flattening or horizontally crushing artwork.
-        g.setColor(new Color(12,30,64,240));g.fillRoundRect(104,551,1450,57,12,12);
-        g.setColor(new Color(70,177,241,210));g.setStroke(new BasicStroke(3));g.drawRoundRect(104,551,1450,57,12,12);
-        pixelPanelText(g,"SERVERS",140,565,5,Color.decode("#EAF5FF"));
-        pixelPanelText(g,"PLAYERS",1008,569,4,Color.decode("#EAF5FF"));
-        pixelPanelText(g,"PING",1363,569,4,Color.decode("#EAF5FF"));
-        int n = Math.min(servers.size(),3);
-        for(int i=0;i<n;i++) {
-            ServerStat row = servers.get(i);
-            int y=624+i*83;
-            // Separate row panel geometry and editable contents.
-            g.setColor(new Color(7,26,55,245));g.fillRoundRect(110,y,1450,76,13,13);
-            g.setColor(new Color(41,180,242,225));g.setStroke(new BasicStroke(3));g.drawRoundRect(110,y,1450,76,13,13);
-            g.setColor(new Color(54,95,150,165));g.setStroke(new BasicStroke(2));
-            g.drawLine(989,y+8,989,y+68);g.drawLine(1310,y+8,1310,y+68);
-            Color rowColor = row.online() ? Color.decode("#38F28C") : Color.decode("#FF6276");
-            g.setColor(rowColor);g.fillOval(140,y+26,22,22);
-            String icon = row.id().equalsIgnoreCase("oneblock")?"oneblock":row.id().equalsIgnoreCase("arcade")?"arcade":null;
-            if(icon!=null) place(g,icon,178,y+10,55,55);
-            liveText(g,"server."+row.id()+".name",row.name(),255,y+22,4,Color.decode("#F3F7FF"));
-            String count=row.players()+" / "+maxPlayers("server."+row.id()+".max-players",10000);
-            liveText(g,"server."+row.id()+".players",count,1035,y+23,3,Color.decode("#F3F7FF"));
-            String ping=row.online()?row.pingMs()+" ms":"Offline";
-            Color pingColor=!row.online()?Color.decode("#FF6276"):row.pingMs()>80?Color.decode("#FFCA56"):Color.decode("#38F28C");
-            liveText(g,"server."+row.id()+".ping",ping,1370,y+23,3,pingColor);
+        // Only values change. All static art, labels, panels, and characters
+        // are preserved from the approved master image.
+        atlasField(g, "total", totalPlayers+" / "+maxPlayers("network.max-players",10000), 377, 408, 31, 412, Color.WHITE);
+        atlasField(g, "network-state", online ? "Operational" : "Offline", 1095, 407, 30, 360, statusColor);
+        int n = Math.min(servers.size(), 2);
+        for (int i=0;i<n;i++) {
+            ServerStat r=servers.get(i);
+            int y=614+i*80;
+            // Online/offline dot, independently controlled per backend.
+            g.setColor(r.online()?Color.decode("#2CF090"):Color.decode("#F65B6B"));
+            g.fillOval(185,y+10,23,23);
+            String count=r.online()?r.players()+" / "+maxPlayers("server."+r.id()+".max-players",10000):"0 / "+maxPlayers("server."+r.id()+".max-players",10000);
+            String ping=r.online()?r.pingMs()+" ms":"Offline";
+            atlasField(g,"server."+r.id()+".players",count,981,y+9,25,236,Color.WHITE);
+            atlasField(g,"server."+r.id()+".ping",ping,1305,y+9,25,170,r.online()?Color.decode("#31F28D"):Color.decode("#FF6478"));
         }
-        int footerY=Math.min(850,628+Math.max(2,n)*83+12);
-        g.setColor(new Color(11,34,67,244));g.fillRoundRect(106,footerY,940,88,14,14);
-        g.fillRoundRect(1080,footerY,474,88,14,14);
-        g.setColor(new Color(47,175,240,225));g.setStroke(new BasicStroke(3));
-        g.drawRoundRect(106,footerY,940,88,14,14);g.drawRoundRect(1080,footerY,474,88,14,14);
-        pixelPanelText(g,"SERVER ADDRESS",149,footerY+12,3,Color.decode("#98CDF9"));
-        liveText(g,"address",config.getProperty("network.address","play.cuborianetwork.net"),149,footerY+48,3,Color.decode("#F4F8FF"));
-        liveText(g,"interval","UPDATES EVERY "+config.getProperty("update.seconds","30")+"S",1107,footerY+31,3,Color.decode("#EAF5FF"));
+        atlasField(g,"address",config.getProperty("network.address","play.cuborianetwork.net"),386,838,27,438,Color.WHITE);
+        // Update interval is fixed at its design position but changes with configuration.
+        // The update interval label is baked into the approved footer artwork.
+        // Keep the matching typography rather than drawing a conflicting second label.
         g.dispose();
         try(ByteArrayOutputStream out=new ByteArrayOutputStream()) {
             if(!ImageIO.write(image,"png",out))throw new IOException("PNG writer unavailable");
@@ -219,6 +191,32 @@ public final class CuboriaStatus {
         } catch(IOException ex) {throw new CompletionException(ex);}
     }
 
+    private static final String FONT_CHARS="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 /.-:_!?@#+%()";
+    private void atlasField(Graphics2D g,String key,String value,int x,int y,int size,int maxWidth,Color color){
+        x=slot("text."+key,"x",x);
+        y=slot("text."+key,"y",y);
+        size=slot("text."+key,"size",size);
+        maxWidth=slot("text."+key,"max-width",maxWidth);
+        drawAtlas(g,value,x,y,size,maxWidth,color);
+    }
+    private void drawAtlas(Graphics2D g,String value,int x,int y,int height,int maxWidth,Color color){
+        BufferedImage sheet=asset("/dashboard-assets/font-atlas.png");
+        if(sheet==null){pixelPanelText(g,value,x,y,3,color);return;}
+        int cellWidth=43,cellHeight=49,columns=12;
+        double natural=value.length()*height*0.69;
+        int letterWidth=Math.max(6,(int)Math.round(height*0.69*Math.min(1.,maxWidth/Math.max(1,natural))));
+        Composite original=g.getComposite();
+        // Keep source glyph colors, with a modest state tint only for the network status.
+        for(int i=0;i<value.length();i++){
+            int idx=FONT_CHARS.indexOf(value.charAt(i));
+            if(idx<0)idx=FONT_CHARS.indexOf(' ');
+            if(value.charAt(i)==' ')continue;
+            int sx=(idx%columns)*cellWidth,sy=(idx/columns)*cellHeight;
+            g.drawImage(sheet,x+i*letterWidth,y,x+(i+1)*letterWidth,y+height,
+                    sx,sy,sx+cellWidth,sy+cellHeight,null);
+        }
+        g.setComposite(original);
+    }
     private void pixelPanelText(Graphics2D g,String value,int x,int y,int scale,Color color){
         drawPixelText(g,value,x,y,scale,color,Color.decode("#050B1F"),1);
     }

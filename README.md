@@ -1,28 +1,15 @@
-# CuboriaStatus v0.8 — two-state modular Velocity dashboard
+# CuboriaStatus v0.9 — approved artwork renderer
 
-Build the plugin using GitHub Actions (`.github/workflows/build.yml`). Download the JAR artifact and install on the Velocity proxy. Java 21+ supported by the Gradle target; your proxy uses Java 25.
+Velocity Discord status dashboard. **Source release; requires Gradle build and runtime testing.**
 
-## Changes
-- **Network status only Online / Offline**, with no Degraded state. If at least one registered backend answers its ping, network shows Online; if none answer, Offline. (This does not measure the proxy being alive from outside.)
-- OneBlock and Arcade independently show connected players, online/offline, and ping.
-- Status artwork is separate `online.png` / `offline.png`, with each graphic position configurable.
-- Each layer copied out to `plugins/cuboriastatus/assets/` on first start; edit its PNG then restart proxy to clear the image cache.
-- Live text positions are adjustable with `layout.text.<field>.x`, `.y`, `.scale` in `config.properties`.
-- Per-backend/max network display set to 10000. This is **not** enforced capacity.
-- Edits one Discord message every 30 sec; preserves `message-id.txt`.
+## Design
+`src/main/resources/dashboard-assets/template-base.png` is built from the user-approved Cuboria status artwork. It contains fixed scenery, characters, panels, labels, rows, and footer. Live values and network signs are drawn separately. Existing PNG modules are retained in `dashboard-assets` for future swaps.
 
-## Important
-This build retains the source artwork placement from v0.7. The source project's earlier hand-drawn frame and rows still differ from the exact approved mockup. It has not been compiled or tested here. Test the Discord output before removing your working v0.7 JAR. The separate assets are transparent PNGs (not SVG vectors).
+`font-atlas.png` is a **fixed-cell technical glyph atlas** with explicit 43×49 pixel cells, 12 columns, ordered by the `FONT_CHARS` constant in the Java renderer. It is a best-effort styled alternative; it is **not an exact extraction of the font from the original artwork**. `icy_pixel_font_atlas_sprite_sheet.png` is also supplied as a visual font reference, but its irregular glyph alignment is not safe for automatic slicing.
 
-## Security
-Do not commit your Discord bot token. Put it only into your server's `plugins/cuboriastatus/config.properties`.
+## Config and installation
+Build with the supplied GitHub Actions workflow (`gradle clean shadowJar`), stop Velocity, replace the JAR in `plugins`, and restart. Your existing server-side `plugins/cuboriastatus/config.properties` retains Discord credentials. Backend identifiers must match Velocity server names (`oneblock`, `arcade`). This JAR copies the new assets to `plugins/cuboriastatus/assets` **only when files do not already exist**. If updating from older versions, replace the `template-base.png`, `sign-online.png`, `sign-offline.png` and `font-atlas.png` files if you want fresh versions.
 
-## Build
-`gradle clean shadowJar --no-daemon`
+New positional overrides use `layout.text.total.x`, `layout.text.total.y`, `layout.text.total.size` and `layout.text.total.max-width`; similarly `network-state`, `server.oneblock.players`, `server.oneblock.ping`, `server.arcade.players`, `server.arcade.ping`, `address` and `interval`. The status sign is selected by proxy-backend availability: at least one backend reachable => ONLINE, none => OFFLINE. A dead proxy cannot update Discord until it starts again.
 
-## Installation
-1. Upload extracted contents **inside** `CuboriaStatus-v0.8/` to your GitHub repository root (preserve src/main/... paths).
-2. Run Actions → Build CuboriaStatus.
-3. Download and extract the build artifact.
-4. Stop Velocity, back up/remove old CuboriaStatus jar, add new jar, start proxy.
-5. Keep your existing server-side config/token and message ID. New layout options can be added to existing config.
+The 10,000-player maximum is for display only; it does not alter proxy capacity.
