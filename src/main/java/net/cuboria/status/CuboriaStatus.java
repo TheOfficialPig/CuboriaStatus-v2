@@ -38,7 +38,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.7.0", authors = {"Cuboria"})
+@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.8.0", authors = {"Cuboria"})
 public final class CuboriaStatus {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -69,7 +69,7 @@ public final class CuboriaStatus {
             }
             Path artDir=directory.resolve("assets");
             Files.createDirectories(artDir);
-            String[] arts={"background","logo","character-left","character-right","online","degraded","offline","players","network","header-title","header-players","header-ping","row","footer-address","footer-update","oneblock","arcade"};
+            String[] arts={"background","logo","character-left","character-right","online","offline","players","network","header-title","header-players","header-ping","row","footer-address","footer-update","oneblock","arcade"};
             for(String name:arts){
                 Path target=artDir.resolve(name+".png");
                 if(Files.notExists(target))try(InputStream asset=getClass().getResourceAsStream("/dashboard-assets/"+name+".png")){
@@ -84,7 +84,7 @@ public final class CuboriaStatus {
                     .delay(5, TimeUnit.SECONDS)
                     .repeat(interval, TimeUnit.SECONDS)
                     .schedule();
-            logger.info("CuboriaStatus v0.7.0 started with independent artwork layers.");
+            logger.info("CuboriaStatus v0.8.0 started with independent artwork layers.");
         } catch (Exception ex) {
             logger.error("Unable to initialize CuboriaStatus", ex);
         }
@@ -153,13 +153,12 @@ public final class CuboriaStatus {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g.setColor(Color.decode("#071327"));g.fillRect(0,0,W,H);
         place(g,"background",0,0,W,H);
-        g.setColor(new Color(3,12,32,185));g.fillRoundRect(22,20,1628,895,26,26);
-        g.setColor(new Color(41,168,238,170));g.setStroke(new BasicStroke(3));g.drawRoundRect(22,20,1628,895,26,26);
+        // Do not dim background with a dark full-canvas overlay.
 
         long up = servers.stream().filter(ServerStat::online).count();
-        String status = servers.isEmpty() || up==0 ? "OFFLINE" : up==servers.size() ? "ONLINE" : "DEGRADED";
-        Color signal = status.equals("ONLINE") ? Color.decode("#31F28D") : status.equals("OFFLINE") ? Color.decode("#FF6276") : Color.decode("#FFCA56");
-        String state = status.equals("ONLINE") ? "Operational" : status.equals("DEGRADED") ? "Degraded" : "Offline";
+        String status = up > 0 ? "ONLINE" : "OFFLINE";
+        Color signal = status.equals("ONLINE") ? Color.decode("#31F28D") : Color.decode("#FF6276");
+        String state = status.equals("ONLINE") ? "Operational" : "Offline";
 
         // Header layers (never flatten into the underlying background).
         place(g,"logo",200,40,780,265);
@@ -170,14 +169,14 @@ public final class CuboriaStatus {
         // A panel inset covers the old green label and uses the same pixel font for all states.
         // Disabled by default for ONLINE, whose source artwork already contains the correct word.
         if (!status.equals("ONLINE")) {
-            g.setColor(status.equals("OFFLINE") ? new Color(74,21,33,245) : new Color(73,47,20,245));
+            g.setColor(new Color(74,21,33,245));
             g.fillRoundRect(1436,162,160,45,8,8);
             drawPixelText(g,status,1444,172,4,signal,Color.decode("#081021"),1);
         }
         place(g,"players",66,310,734,228);
         place(g,"network",852,310,754,228);
-        pixelPanelText(g,totalPlayers+" / "+maxPlayers("network.max-players",10000),282,440,5,Color.decode("#F4F8FF"));
-        pixelPanelText(g,state,1093,440,5,signal);
+        liveText(g,"total",totalPlayers+" / "+maxPlayers("network.max-players",10000),282,440,5,Color.decode("#F4F8FF"));
+        liveText(g,"network-state",state,1093,440,5,signal);
 
         // Keep headings as live text rather than flattening or horizontally crushing artwork.
         g.setColor(new Color(12,30,64,240));g.fillRoundRect(104,551,1450,57,12,12);
@@ -198,12 +197,12 @@ public final class CuboriaStatus {
             g.setColor(rowColor);g.fillOval(140,y+26,22,22);
             String icon = row.id().equalsIgnoreCase("oneblock")?"oneblock":row.id().equalsIgnoreCase("arcade")?"arcade":null;
             if(icon!=null) place(g,icon,178,y+10,55,55);
-            pixelPanelText(g,row.name(),255,y+22,4,Color.decode("#F3F7FF"));
+            liveText(g,"server."+row.id()+".name",row.name(),255,y+22,4,Color.decode("#F3F7FF"));
             String count=row.players()+" / "+maxPlayers("server."+row.id()+".max-players",10000);
-            pixelPanelText(g,count,1035,y+23,3,Color.decode("#F3F7FF"));
+            liveText(g,"server."+row.id()+".players",count,1035,y+23,3,Color.decode("#F3F7FF"));
             String ping=row.online()?row.pingMs()+" ms":"Offline";
             Color pingColor=!row.online()?Color.decode("#FF6276"):row.pingMs()>80?Color.decode("#FFCA56"):Color.decode("#38F28C");
-            pixelPanelText(g,ping,1370,y+23,3,pingColor);
+            liveText(g,"server."+row.id()+".ping",ping,1370,y+23,3,pingColor);
         }
         int footerY=Math.min(850,628+Math.max(2,n)*83+12);
         g.setColor(new Color(11,34,67,244));g.fillRoundRect(106,footerY,940,88,14,14);
@@ -211,8 +210,8 @@ public final class CuboriaStatus {
         g.setColor(new Color(47,175,240,225));g.setStroke(new BasicStroke(3));
         g.drawRoundRect(106,footerY,940,88,14,14);g.drawRoundRect(1080,footerY,474,88,14,14);
         pixelPanelText(g,"SERVER ADDRESS",149,footerY+12,3,Color.decode("#98CDF9"));
-        pixelPanelText(g,config.getProperty("network.address","play.cuborianetwork.net"),149,footerY+48,3,Color.decode("#F4F8FF"));
-        pixelPanelText(g,"UPDATES EVERY "+config.getProperty("update.seconds","30")+"S",1107,footerY+31,3,Color.decode("#EAF5FF"));
+        liveText(g,"address",config.getProperty("network.address","play.cuborianetwork.net"),149,footerY+48,3,Color.decode("#F4F8FF"));
+        liveText(g,"interval","UPDATES EVERY "+config.getProperty("update.seconds","30")+"S",1107,footerY+31,3,Color.decode("#EAF5FF"));
         g.dispose();
         try(ByteArrayOutputStream out=new ByteArrayOutputStream()) {
             if(!ImageIO.write(image,"png",out))throw new IOException("PNG writer unavailable");
@@ -222,6 +221,12 @@ public final class CuboriaStatus {
 
     private void pixelPanelText(Graphics2D g,String value,int x,int y,int scale,Color color){
         drawPixelText(g,value,x,y,scale,color,Color.decode("#050B1F"),1);
+    }
+    private void liveText(Graphics2D g,String field,String text,int x,int y,int scale,Color color) {
+        x=slot("text."+field,"x",x);
+        y=slot("text."+field,"y",y);
+        scale=Math.max(1,slot("text."+field,"scale",scale));
+        pixelPanelText(g,text,x,y,scale,color);
     }
     private int slot(String name,String axis,int fallback){
         try{return Integer.parseInt(config.getProperty("layout."+name+"."+axis,""+fallback));}
