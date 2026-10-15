@@ -1,31 +1,44 @@
 package net.cuboria.status;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.inject.Inject;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import org.slf4j.Logger;
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonParser;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
+import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
-import java.net.http.*;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
-@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.4.0", authors = {"Cuboria"})
+@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.5.0", authors = {"Cuboria"})
 public final class CuboriaStatus {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -34,6 +47,7 @@ public final class CuboriaStatus {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final Gson gson = new Gson();
     private final AtomicBoolean updating = new AtomicBoolean(false);
+    private final Map<String, BufferedImage> assetCache = new HashMap<>();
     private ScheduledTask task;
 
     @Inject
@@ -53,11 +67,15 @@ public final class CuboriaStatus {
                     Files.copy(in, file);
                 }
             }
-            try (InputStream in = Files.newInputStream(file)) { config.load(in); }
+            try (InputStream in = Files.newInputStream(file)) {
+                config.load(in);
+            }
             int interval = Math.max(15, Integer.parseInt(config.getProperty("update.seconds", "30")));
-            task = proxy.getScheduler().buildTask(this, this::tick).delay(5, TimeUnit.SECONDS)
-                    .repeat(interval, TimeUnit.SECONDS).schedule();
-            logger.info("CuboriaStatus started. Edit plugins/cuboriastatus/config.properties for Discord settings.");
+            task = proxy.getScheduler().buildTask(this, this::tick)
+                    .delay(5, TimeUnit.SECONDS)
+                    .repeat(interval, TimeUnit.SECONDS)
+                    .schedule();
+            logger.info("CuboriaStatus v0.5.0 started with asset-based dashboard renderer.");
         } catch (Exception ex) {
             logger.error("Unable to initialize CuboriaStatus", ex);
         }
@@ -68,37 +86,43 @@ public final class CuboriaStatus {
         if (task != null) task.cancel();
     }
 
-    private record ServerStat(String name, int players, boolean online, long pingMs) {}
+    private record ServerStat(String id, String name, int players, boolean online, long pingMs) {}
 
     private void tick() {
         if (!updating.compareAndSet(false, true)) return;
+
         String token = config.getProperty("discord.token", "").trim();
         String channel = config.getProperty("discord.channel-id", "").trim();
         if (token.isBlank() || token.startsWith("PASTE_") || !channel.matches("[0-9]{15,22}")) {
-            logger.warn("CuboriaStatus: configure a valid bot token and channel ID first.");
+            logger.warn("CuboriaStatus: configure a valid Discord bot token and channel ID first.");
             updating.set(false);
             return;
         }
+
         List<String> ids = Arrays.stream(config.getProperty("servers", "oneblock,arcade").split(","))
                 .map(String::trim).filter(s -> !s.isEmpty()).toList();
+
         List<CompletableFuture<ServerStat>> checks = new ArrayList<>();
         for (String id : ids) {
-            String title = config.getProperty("server." + id, id);
+            String title = config.getProperty("server." + id, prettify(id));
             var registered = proxy.getServer(id);
             if (registered.isEmpty()) {
-                checks.add(CompletableFuture.completedFuture(new ServerStat(title, 0, false, -1)));
+                checks.add(CompletableFuture.completedFuture(new ServerStat(id, title, 0, false, -1)));
                 continue;
             }
             var backend = registered.get();
             int count = backend.getPlayersConnected().size();
-            // Ping is asynchronous; a timeout produces an offline indicator.
             long start = System.nanoTime();
             checks.add(backend.ping().orTimeout(5, TimeUnit.SECONDS)
-                    .handle((response, error) -> new ServerStat(title, count,
+                    .handle((response, error) -> new ServerStat(
+                            id,
+                            title,
+                            count,
                             error == null && response != null,
-                            error == null && response != null
-                                    ? TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) : -1)));
+                            error == null && response != null ? TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) : -1
+                    )));
         }
+
         CompletableFuture.allOf(checks.toArray(CompletableFuture[]::new))
                 .thenApply(ignored -> checks.stream().map(CompletableFuture::join).toList())
                 .thenApply(stats -> render(stats, proxy.getPlayerCount()))
@@ -109,241 +133,228 @@ public final class CuboriaStatus {
                 });
     }
 
-    private byte[] render(List<ServerStat> servers, int total) {
-        final int w = 1200;
-        final int h = 554 + servers.size() * 76;
-        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+    private byte[] render(List<ServerStat> servers, int totalPlayers) {
+        final int width = 1600;
+        final int rowHeight = 88;
+        final int rows = Math.max(1, servers.size());
+        final int height = 720 + (rows * rowHeight);
+
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-        Color bg = hex("#06101F"), panel = hex("#08162A"), row = hex("#08182E");
-        Color white = hex("#F7FAFF"), muted = hex("#9AAECA"), blue = hex("#31BEF5");
-        Color green = hex("#17E69A"), red = hex("#F15C76");
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_OFF);
 
-        g.setPaint(new GradientPaint(0, 0, hex("#04101F"), w, h, hex("#07142B")));
-        g.fillRect(0, 0, w, h);
-        // Soft blue exterior glow and main dashboard frame.
-        for (int i = 8; i >= 1; i--) {
-            g.setColor(new Color(0, 105, 255, 5));
-            g.setStroke(new BasicStroke(i * 2));
-            g.drawRoundRect(31, 26, w - 62, h - 52, 27, 27);
+        Color bg = hex("#07111E");
+        Color overlay = new Color(3, 9, 18, 160);
+        Color white = hex("#F4F8FF");
+        Color ice = hex("#D3E9FF");
+        Color blue = hex("#39C2FF");
+        Color green = hex("#23F0A0");
+        Color yellow = hex("#FFD056");
+        Color red = hex("#FF6B7D");
+        Color shadow = new Color(5, 12, 28, 220);
+
+        g.setColor(bg);
+        g.fillRect(0, 0, width, height);
+
+        BufferedImage landscape = asset("/bg-landscape.png");
+        if (landscape != null) {
+            drawCover(g, landscape, 0, 0, width, height, 0.42f);
         }
-        fillRound(g, 36, 30, w - 72, h - 60, 26, bg);
-        g.setColor(hex("#0873E4")); g.setStroke(new BasicStroke(1.6f));
-        g.drawRoundRect(36, 30, w - 72, h - 60, 26, 26);
+        g.setColor(overlay);
+        g.fillRect(0, 0, width, height);
 
-        // Fade the decorative landscape in horizontally to avoid a visible rectangular edge.
-        try (InputStream is = getClass().getResourceAsStream("/header-landscape.png")) {
-            if (is != null) {
-                BufferedImage landscape = ImageIO.read(is);
-                if (landscape != null) {
-                    java.awt.Composite previous = g.getComposite();
-                    for (int dx = 0; dx < 640; dx += 4) {
-                        float edge = Math.min(1f, Math.min(dx / 180f, (640 - dx) / 50f));
-                        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.25f * Math.max(0f, edge)));
-                        int sx = (int) ((dx / 640.0) * landscape.getWidth());
-                        int sw = Math.max(1, (int) Math.ceil(4 * landscape.getWidth() / 640.0));
-                        g.drawImage(landscape, 490 + dx, 34, 490 + dx + 4, 170,
-                                sx, 0, Math.min(landscape.getWidth(), sx + sw), landscape.getHeight(), null);
-                    }
-                    g.setComposite(previous);
-                }
-            }
-        } catch (IOException ignored) { }
+        // Soft outer frame
+        for (int i = 0; i < 7; i++) {
+            g.setColor(new Color(0, 175, 255, 16 - i * 2));
+            g.drawRoundRect(24 + i, 20 + i, width - 48 - i * 2, height - 40 - i * 2, 34, 34);
+        }
+        g.setColor(new Color(0, 120, 255, 90));
+        g.drawRoundRect(32, 28, width - 64, height - 56, 30, 30);
 
-        // Genuine Cuboria icon copied from user-supplied branding.
-        fillRound(g, 66, 58, 98, 98, 19, hex("#091C38"));
-        try (InputStream is = getClass().getResourceAsStream("/cuboria-logo.png")) {
-            if (is != null) {
-                BufferedImage logo = ImageIO.read(is);
-                if (logo != null) g.drawImage(logo, 67, 58, 96, 96, null);
-            }
-        } catch (IOException ignored) { }
-        g.setStroke(new BasicStroke(2)); g.setColor(blue);
-        g.drawRoundRect(66, 58, 98, 98, 19, 19);
-        g.setFont(new Font("SansSerif", Font.BOLD, 37));
-        g.setColor(white); g.drawString("CUBORIA", 188, 100);
-        g.setColor(hex("#39AFFF")); g.drawString("NETWORK", 392, 100);
-        g.setColor(muted); g.setFont(new Font("SansSerif", Font.PLAIN, 20));
-        g.drawString(config.getProperty("dashboard.subtitle", "Live Minecraft Server Status"), 190, 131);
+        // Header assets
+        BufferedImage badge = asset("/title-badge.png");
+        BufferedImage onlineSign = asset("/online-sign.png");
+        BufferedImage totalPanel = asset("/panel-total.png");
+        BufferedImage networkPanel = asset("/panel-network.png");
+        BufferedImage headerServers = asset("/header-servers.png");
+        BufferedImage serverRow = asset("/row-server.png");
+        BufferedImage footerPanels = asset("/footer-panels.png");
+        BufferedImage leftChar = asset("/char-left.png");
+        BufferedImage rightChar = asset("/char-right.png");
 
-        long up = servers.stream().filter(ServerStat::online).count();
-        boolean allOnline = !servers.isEmpty() && up == servers.size();
-        String overall = allOnline ? "ONLINE" : (up == 0 ? "OFFLINE" : "DEGRADED");
-        Color status = allOnline ? green : (up == 0 ? red : hex("#FFB547"));
-        fillRound(g, 974, 79, 153, 46, 23, hex("#072721"));
-        g.setColor(status); g.setStroke(new BasicStroke(2));
-        g.drawRoundRect(974, 79, 153, 46, 23, 23);
-        g.fillOval(992, 95, 13, 13);
-        g.setFont(new Font("SansSerif", Font.BOLD, 18)); g.drawString(overall, 1016, 108);
+        int headerTop = 34;
+        drawImage(g, badge, 170, headerTop + 4, 860, 286, 1f);
+        drawImage(g, onlineSign, 1140, headerTop + 28, 330, 165, 1f);
+        drawImage(g, leftChar, 56, 62, 180, 180, 1f);
+        drawImage(g, rightChar, 1300, 86, 190, 142, 1f);
 
-        // Summary card
-        fillRound(g, 60, 193, 1080, 136, 18, panel);
-        thinOutline(g, 60, 193, 1080, 136, 18);
-        g.setColor(hex("#243957")); g.drawLine(603, 218, 603, 304);
-        fillRound(g, 83, 223, 82, 82, 17, hex("#102B58"));
-        people(g, 124, 263, blue);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 18)); g.setColor(muted);
-        g.drawString("Total Players", 184, 254);
-        g.setFont(new Font("SansSerif", Font.BOLD, 34)); g.setColor(white);
-        String onlineText = Integer.toString(total);
-        g.drawString(onlineText, 184, 297);
-        int max = maxPlayers("network.max-players", 10000);
-        g.setFont(new Font("SansSerif", Font.BOLD, 29)); g.setColor(hex("#93ADD8"));
-        g.drawString("/ " + max, 197 + textWidth(g, onlineText, new Font("SansSerif", Font.BOLD, 34)), 296);
-        fillRound(g, 635, 223, 82, 82, 17, hex("#06332F"));
-        g.setColor(status); g.setStroke(new BasicStroke(4));
-        g.drawOval(660, 246, 32, 32);
-        if (allOnline) { g.drawLine(667, 262, 674, 269); g.drawLine(674, 269, 688, 252); }
-        g.setColor(muted); g.setFont(new Font("SansSerif", Font.PLAIN, 18));
-        g.drawString("Network Status", 740, 254);
-        g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 30));
-        g.drawString(allOnline ? "Operational" : (up == 0 ? "Unavailable" : "Partial Outage"), 740, 297);
+        long onlineCount = servers.stream().filter(ServerStat::online).count();
+        boolean allOnline = !servers.isEmpty() && onlineCount == servers.size();
+        String overallText = allOnline ? "OPERATIONAL" : (onlineCount == 0 ? "OFFLINE" : "DEGRADED");
+        Color overallColor = allOnline ? green : (onlineCount == 0 ? red : yellow);
 
-        // Compact two-server section, automatically sized if more backends are configured.
-        final int boxY = 348;
-        final int boxH = 67 + servers.size() * 76;
-        fillRound(g, 60, boxY, 1080, boxH, 16, panel);
-        thinOutline(g, 60, boxY, 1080, boxH, 16);
-        g.setColor(white); g.setFont(new Font("SansSerif", Font.BOLD, 24));
-        g.drawString("Servers", 86, boxY + 39);
-        g.setColor(muted); g.setFont(new Font("SansSerif", Font.BOLD, 12));
-        right(g, "PLAYERS                         PROXY PING", 1105, boxY + 37);
+        // Summary panels
+        int summaryY = 248;
+        drawImage(g, totalPanel, 74, summaryY, 660, 220, 1f);
+        drawImage(g, networkPanel, 846, summaryY, 680, 220, 1f);
+
+        int networkMax = maxPlayers("network.max-players", 10000);
+        // Total live number
+        drawPixelText(g, String.valueOf(totalPlayers), 255, summaryY + 112, 8, white, shadow, 2);
+        int totalWidth = pixelTextWidth(String.valueOf(totalPlayers), 8, 2);
+        drawPixelText(g, "/", 255 + totalWidth + 18, summaryY + 118, 6, ice, shadow, 1);
+        drawPixelText(g, String.valueOf(networkMax), 255 + totalWidth + 58, summaryY + 118, 6, ice, shadow, 1);
+
+        // Network status live text
+        int statusScale = overallText.length() > 10 ? 5 : 6;
+        drawPixelText(g, overallText, 1035, summaryY + 116, statusScale, overallColor, shadow, 2);
+
+        // Servers header
+        int listHeaderY = summaryY + 232;
+        drawImage(g, headerServers, 86, listHeaderY, 1425, 102, 1f);
+
+        // Server rows
+        int rowsY = listHeaderY + 78;
         for (int i = 0; i < servers.size(); i++) {
-            ServerStat s = servers.get(i);
-            int y = boxY + 57 + i * 76;
-            fillRound(g, 78, y, 1044, 66, 13, row);
-            thinOutline(g, 78, y, 1044, 66, 13);
-            g.setColor(s.online ? green : red);
-            g.fillOval(102, y + 26, 14, 14);
-            g.setFont(new Font("SansSerif", Font.BOLD, 21)); g.setColor(white);
-            String name = s.name();
-            String icon = name.equalsIgnoreCase("OneBlock") ? "/oneblock-icon.png" :
-                    name.equalsIgnoreCase("Arcade") ? "/arcade-icon.png" : null;
-            if (icon == null || !drawIcon(g, icon, 126, y + 9, 48)) drawServer(g, 137, y + 18);
-            g.drawString(name, 193, y + 43);
-            g.setFont(new Font("SansSerif", Font.BOLD, 20));
-            g.setColor(white);
-            String playerCount = s.players + " / " + maxPlayers("server." + serverIdForName(s.name) + ".max-players", max);
-            right(g, playerCount, 905, y + 43);
-            g.setColor(s.online ? (s.pingMs < 80 ? green : hex("#F9C75E")) : red);
-            right(g, s.online ? (s.pingMs + " ms") : "Offline", 1095, y + 43);
+            ServerStat stat = servers.get(i);
+            int y = rowsY + i * rowHeight;
+            drawImage(g, serverRow, 90, y, 1410, 92, 1f);
+
+            BufferedImage icon = switch (stat.id().toLowerCase(Locale.ROOT)) {
+                case "oneblock" -> asset("/oneblock-icon.png");
+                case "arcade" -> asset("/arcade-icon.png");
+                default -> null;
+            };
+            if (icon != null) {
+                drawImage(g, icon, 200, y + 23, 46, 46, 1f);
+            }
+
+            Color nameColor = stat.online() ? white : hex("#FFD7DE");
+            drawPixelText(g, stat.name(), 272, y + 28, 5, nameColor, shadow, 1);
+
+            String playersText = stat.players() + " / " + maxPlayers("server." + stat.id() + ".max-players", networkMax);
+            drawPixelText(g, playersText, 982, y + 30, 4, white, shadow, 1);
+
+            String pingText = stat.online() ? stat.pingMs() + " ms" : "Offline";
+            Color pingColor = !stat.online() ? red : (stat.pingMs() <= 80 ? green : yellow);
+            int pingScale = stat.online() ? 4 : 4;
+            int pingWidth = pixelTextWidth(pingText, pingScale, 1);
+            drawPixelText(g, pingText, 1430 - pingWidth, y + 30, pingScale, pingColor, shadow, 1);
         }
-        int footerY = boxY + boxH + 24;
-        g.setColor(hex("#2C4263")); g.setStroke(new BasicStroke(1));
-        g.drawLine(62, footerY, 1138, footerY);
-        g.setFont(new Font("SansSerif", Font.BOLD, 12)); g.setColor(muted);
-        g.drawString("SERVER ADDRESS", 121, footerY + 30);
-        g.setFont(new Font("SansSerif", Font.BOLD, 21)); g.setColor(white);
-        g.drawString(config.getProperty("network.address", "play.cuborianetwork.net"), 121, footerY + 60);
-        g.setColor(blue); g.setStroke(new BasicStroke(4));
-        g.drawRoundRect(82, footerY + 37, 25, 18, 7, 7);
-        fillRound(g, 904, footerY + 27, 218, 42, 20, hex("#0D2140"));
-        g.setColor(hex("#2574C8")); g.setStroke(new BasicStroke(1));
-        g.drawRoundRect(904, footerY + 27, 218, 42, 20, 20);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 15)); g.setColor(white);
-        g.drawString("Updates every " + Math.max(15, Integer.parseInt(config.getProperty("update.seconds", "30"))) + "s", 925, footerY + 54);
+
+        // Footer
+        int footerY = rowsY + rows * rowHeight + 28;
+        drawImage(g, footerPanels, 86, footerY, 1425, 95, 1f);
+        drawPixelText(g, config.getProperty("network.address", "play.cuborianetwork.net"), 270, footerY + 34, 4, white, shadow, 1);
+
         g.dispose();
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            if (!ImageIO.write(img, "png", out)) throw new IOException("No PNG writer available");
+            ImageIO.write(img, "png", out);
             return out.toByteArray();
-        } catch (IOException ex) { throw new CompletionException(ex); }
+        } catch (IOException ex) {
+            throw new CompletionException(ex);
+        }
+    }
+
+    private BufferedImage asset(String path) {
+        return assetCache.computeIfAbsent(path, key -> {
+            try (InputStream in = getClass().getResourceAsStream(key)) {
+                return in == null ? null : ImageIO.read(in);
+            } catch (IOException ex) {
+                logger.warn("Unable to load asset {}", key, ex);
+                return null;
+            }
+        });
+    }
+
+    private void drawImage(Graphics2D g, BufferedImage image, int x, int y, int w, int h, float alpha) {
+        if (image == null) return;
+        Composite old = g.getComposite();
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
+        g.drawImage(image, x, y, w, h, null);
+        g.setComposite(old);
+    }
+
+    private void drawCover(Graphics2D g, BufferedImage image, int x, int y, int w, int h, float alpha) {
+        if (image == null) return;
+        double scale = Math.max(w / (double) image.getWidth(), h / (double) image.getHeight());
+        int dw = (int) Math.round(image.getWidth() * scale);
+        int dh = (int) Math.round(image.getHeight() * scale);
+        int dx = x + (w - dw) / 2;
+        int dy = y + (h - dh) / 2;
+        drawImage(g, image, dx, dy, dw, dh, alpha);
     }
 
     private int maxPlayers(String key, int fallback) {
-        try { return Math.max(1, Integer.parseInt(config.getProperty(key, String.valueOf(fallback)))); }
-        catch (NumberFormatException ex) { return fallback; }
-    }
-
-    private String serverIdForName(String display) {
-        for (String id : config.getProperty("servers", "oneblock,arcade").split(",")) {
-            id = id.trim();
-            if (config.getProperty("server." + id, id).equals(display)) return id;
+        try {
+            return Math.max(1, Integer.parseInt(config.getProperty(key, String.valueOf(fallback))));
+        } catch (NumberFormatException ex) {
+            return fallback;
         }
-        return display.toLowerCase(java.util.Locale.ROOT);
     }
 
-    private static Color hex(String h) { return Color.decode(h); }
-    private static void fillRound(Graphics2D g, int x, int y, int w, int h, int r, Color color) {
-        g.setColor(color); g.fillRoundRect(x, y, w, h, r, r);
-    }
-    private static void thinOutline(Graphics2D g, int x, int y, int w, int h, int r) {
-        g.setColor(new Color(30, 75, 139, 160)); g.setStroke(new BasicStroke(1));
-        g.drawRoundRect(x, y, w, h, r, r);
-    }
-    private static void right(Graphics2D g, String text, int x, int baseline) {
-        g.drawString(text, x - g.getFontMetrics().stringWidth(text), baseline);
-    }
-    private static int textWidth(Graphics2D g, String text, Font font) {
-        return g.getFontMetrics(font).stringWidth(text);
-    }
-    private static void people(Graphics2D g, int x, int y, Color color) {
-        g.setColor(color);
-        g.fillOval(x - 8, y - 20, 16, 16); g.fillOval(x - 28, y - 15, 12, 12); g.fillOval(x + 16, y - 15, 12, 12);
-        g.fillRoundRect(x - 13, y - 2, 26, 22, 8, 8);
-        g.fillRoundRect(x - 32, y + 1, 16, 17, 6, 6); g.fillRoundRect(x + 16, y + 1, 16, 17, 6, 6);
-    }
-    private boolean drawIcon(Graphics2D g, String path, int x, int y, int size) {
-        try (InputStream is = getClass().getResourceAsStream(path)) {
-            if (is == null) return false;
-            BufferedImage icon = ImageIO.read(is);
-            if (icon == null) return false;
-            g.drawImage(icon, x, y, size, size, null);
-            return true;
-        } catch (IOException e) { return false; }
-    }
-
-    private static void drawBlock(Graphics2D g, int x, int y) {
-        g.setColor(hex("#7AC850")); g.fillRect(x, y, 30, 12);
-        g.setColor(hex("#8A5E36")); g.fillRect(x, y + 12, 30, 22);
-        g.setColor(hex("#6B4629")); g.fillRect(x + 18, y + 12, 12, 22);
-        g.setColor(hex("#A7E06C")); g.fillRect(x + 4, y + 3, 10, 4);
-    }
-    private static void drawSword(Graphics2D g, int x, int y) {
-        g.setColor(hex("#5FE8FA")); g.fillRect(x + 17, y, 9, 22);
-        g.setColor(hex("#1CA5DC")); g.fillRect(x + 10, y + 20, 22, 7);
-        g.setColor(hex("#B4CDFB")); g.fillRect(x + 19, y + 26, 6, 11);
-        g.setColor(hex("#26669E")); g.fillRect(x + 18, y + 2, 3, 17);
-    }
-    private static void drawServer(Graphics2D g, int x, int y) {
-        g.setColor(hex("#31BEF5")); g.fillRoundRect(x, y, 30, 26, 6, 6);
-        g.setColor(hex("#0B1B31")); g.fillRect(x + 4, y + 7, 22, 4);
-        g.fillRect(x + 4, y + 17, 22, 4);
+    private static String prettify(String id) {
+        if (id == null || id.isBlank()) return "Server";
+        String raw = id.replace('-', ' ').replace('_', ' ');
+        StringBuilder out = new StringBuilder();
+        for (String part : raw.split("\\s+")) {
+            if (part.isEmpty()) continue;
+            out.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1)).append(' ');
+        }
+        return out.toString().trim();
     }
 
     private CompletableFuture<Void> publish(String token, String channel, byte[] png) {
         Path idFile = directory.resolve("message-id.txt");
         String id = "";
-        try { if (Files.exists(idFile)) id = Files.readString(idFile).trim(); }
-        catch (IOException e) { logger.warn("Could not read message ID", e); }
+        try {
+            if (Files.exists(idFile)) id = Files.readString(idFile).trim();
+        } catch (IOException e) {
+            logger.warn("Could not read message ID", e);
+        }
+
         final boolean editing = id.matches("[0-9]{15,22}");
         String endpoint = "https://discord.com/api/v10/channels/" + channel + "/messages" + (editing ? "/" + id : "");
+
         JsonObject payload = new JsonObject();
         payload.addProperty("content", "");
         JsonArray attachments = new JsonArray();
-        JsonObject attachment = new JsonObject(); attachment.addProperty("id", "0");
-        attachment.addProperty("filename", "cuboria-status.png"); attachments.add(attachment);
+        JsonObject attachment = new JsonObject();
+        attachment.addProperty("id", "0");
+        attachment.addProperty("filename", "cuboria-status.png");
+        attachments.add(attachment);
         payload.add("attachments", attachments);
+
         String boundary = "cuboria" + UUID.randomUUID().toString().replace("-", "");
         byte[] body;
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n" + gson.toJson(payload) + "\r\n").getBytes(StandardCharsets.UTF_8));
             out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"cuboria-status.png\"\r\nContent-Type: image/png\r\n\r\n").getBytes(StandardCharsets.UTF_8));
-            out.write(png); out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write(png);
+            out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
             body = out.toByteArray();
-        } catch (IOException e) { return CompletableFuture.failedFuture(e); }
+        } catch (IOException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(15))
                 .header("Authorization", "Bot " + token)
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-                .method(editing ? "PATCH" : "POST", HttpRequest.BodyPublishers.ofByteArray(body)).build();
+                .method(editing ? "PATCH" : "POST", HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
         return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .thenAccept(response -> {
                     if (response.statusCode() == 404 && editing) {
-                        // Message was deleted or channel changed. A later scheduled tick will create a new one.
-                        try { Files.deleteIfExists(idFile); }
-                        catch (IOException ex) { logger.warn("Unable to reset deleted Discord message ID", ex); }
+                        try {
+                            Files.deleteIfExists(idFile);
+                        } catch (IOException ex) {
+                            logger.warn("Unable to reset deleted Discord message ID", ex);
+                        }
                         logger.warn("Discord status message not found; will recreate on next update.");
                         return;
                     }
@@ -354,9 +365,130 @@ public final class CuboriaStatus {
                     }
                     if (!editing) {
                         String newId = JsonParser.parseString(response.body()).getAsJsonObject().get("id").getAsString();
-                        try { Files.writeString(idFile, newId); }
-                        catch (IOException e) { logger.error("Failed to save Discord message ID; duplicates possible on restart", e); }
+                        try {
+                            Files.writeString(idFile, newId);
+                        } catch (IOException e) {
+                            logger.error("Failed to save Discord message ID; duplicates possible on restart", e);
+                        }
                     }
                 });
+    }
+
+    private static Color hex(String h) {
+        return Color.decode(h);
+    }
+
+    // -----------------------------------------------------
+    // Pixel font renderer for live data text.
+    // -----------------------------------------------------
+    private static final Map<Character, String[]> PIXEL_FONT = new HashMap<>();
+    static {
+        glyph('A', "01110","10001","10001","11111","10001","10001","10001");
+        glyph('B', "11110","10001","10001","11110","10001","10001","11110");
+        glyph('C', "01111","10000","10000","10000","10000","10000","01111");
+        glyph('D', "11110","10001","10001","10001","10001","10001","11110");
+        glyph('E', "11111","10000","10000","11110","10000","10000","11111");
+        glyph('F', "11111","10000","10000","11110","10000","10000","10000");
+        glyph('G', "01111","10000","10000","10111","10001","10001","01111");
+        glyph('H', "10001","10001","10001","11111","10001","10001","10001");
+        glyph('I', "11111","00100","00100","00100","00100","00100","11111");
+        glyph('J', "00111","00010","00010","00010","10010","10010","01100");
+        glyph('K', "10001","10010","10100","11000","10100","10010","10001");
+        glyph('L', "10000","10000","10000","10000","10000","10000","11111");
+        glyph('M', "10001","11011","10101","10101","10001","10001","10001");
+        glyph('N', "10001","11001","10101","10011","10001","10001","10001");
+        glyph('O', "01110","10001","10001","10001","10001","10001","01110");
+        glyph('P', "11110","10001","10001","11110","10000","10000","10000");
+        glyph('Q', "01110","10001","10001","10001","10101","10010","01101");
+        glyph('R', "11110","10001","10001","11110","10100","10010","10001");
+        glyph('S', "01111","10000","10000","01110","00001","00001","11110");
+        glyph('T', "11111","00100","00100","00100","00100","00100","00100");
+        glyph('U', "10001","10001","10001","10001","10001","10001","01110");
+        glyph('V', "10001","10001","10001","10001","10001","01010","00100");
+        glyph('W', "10001","10001","10001","10101","10101","10101","01010");
+        glyph('X', "10001","10001","01010","00100","01010","10001","10001");
+        glyph('Y', "10001","10001","01010","00100","00100","00100","00100");
+        glyph('Z', "11111","00001","00010","00100","01000","10000","11111");
+        glyph('0', "01110","10001","10011","10101","11001","10001","01110");
+        glyph('1', "00100","01100","00100","00100","00100","00100","01110");
+        glyph('2', "01110","10001","00001","00010","00100","01000","11111");
+        glyph('3', "11110","00001","00001","01110","00001","00001","11110");
+        glyph('4', "00010","00110","01010","10010","11111","00010","00010");
+        glyph('5', "11111","10000","10000","11110","00001","00001","11110");
+        glyph('6', "01111","10000","10000","11110","10001","10001","01110");
+        glyph('7', "11111","00001","00010","00100","01000","01000","01000");
+        glyph('8', "01110","10001","10001","01110","10001","10001","01110");
+        glyph('9', "01110","10001","10001","01111","00001","00001","11110");
+        glyph('/', "00001","00010","00100","00100","01000","10000","00000");
+        glyph('.', "00000","00000","00000","00000","00000","01100","01100");
+        glyph(':', "00000","01100","01100","00000","01100","01100","00000");
+        glyph('-', "00000","00000","00000","11111","00000","00000","00000");
+        glyph(' ', "000","000","000","000","000","000","000");
+    }
+
+    private static void glyph(char c, String... rows) {
+        PIXEL_FONT.put(c, rows);
+    }
+
+    private static int pixelTextWidth(String text, int scale, int tracking) {
+        int width = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = normalizeGlyph(text.charAt(i));
+            String[] rows = PIXEL_FONT.getOrDefault(c, PIXEL_FONT.get(' '));
+            width += rows[0].length() * scale;
+            if (i < text.length() - 1) width += tracking * scale;
+        }
+        return width;
+    }
+
+    private static char normalizeGlyph(char c) {
+        if (Character.isLetter(c)) return Character.toUpperCase(c);
+        return PIXEL_FONT.containsKey(c) ? c : ' ';
+    }
+
+    private static void drawPixelText(Graphics2D g, String text, int x, int y, int scale, Color fill, Color shadow, int tracking) {
+        int cx = x;
+        for (int i = 0; i < text.length(); i++) {
+            char c = normalizeGlyph(text.charAt(i));
+            String[] rows = PIXEL_FONT.getOrDefault(c, PIXEL_FONT.get(' '));
+            // shadow pass
+            drawGlyph(g, rows, cx + Math.max(2, scale / 2), y + Math.max(2, scale / 2), scale, shadow);
+            // outline pass
+            drawGlyphOutline(g, rows, cx, y, scale, new Color(5, 10, 25, 245));
+            // fill pass
+            drawGlyph(g, rows, cx, y, scale, fill);
+            cx += rows[0].length() * scale + tracking * scale;
+        }
+    }
+
+    private static void drawGlyph(Graphics2D g, String[] rows, int x, int y, int scale, Color color) {
+        g.setColor(color);
+        for (int row = 0; row < rows.length; row++) {
+            String line = rows[row];
+            for (int col = 0; col < line.length(); col++) {
+                if (line.charAt(col) == '1') {
+                    g.fillRect(x + col * scale, y + row * scale, scale, scale);
+                }
+            }
+        }
+    }
+
+    private static void drawGlyphOutline(Graphics2D g, String[] rows, int x, int y, int scale, Color color) {
+        g.setColor(color);
+        for (int row = 0; row < rows.length; row++) {
+            String line = rows[row];
+            for (int col = 0; col < line.length(); col++) {
+                if (line.charAt(col) != '1') continue;
+                for (int oy = -1; oy <= 1; oy++) {
+                    for (int ox = -1; ox <= 1; ox++) {
+                        int nr = row + oy;
+                        int nc = col + ox;
+                        if (nr < 0 || nr >= rows.length || nc < 0 || nc >= line.length() || rows[nr].charAt(nc) != '1') {
+                            g.fillRect(x + col * scale + ox, y + row * scale + oy, scale, scale);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
