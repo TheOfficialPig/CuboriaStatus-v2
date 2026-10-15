@@ -1,15 +1,22 @@
-# CuboriaStatus v0.9 — approved artwork renderer
+# CuboriaStatus v0.4 — refined dashboard
 
-Velocity Discord status dashboard. **Source release; requires Gradle build and runtime testing.**
+This is the full Java/Gradle source project, not a compiled JAR.
 
-## Design
-`src/main/resources/dashboard-assets/template-base.png` is built from the user-approved Cuboria status artwork. It contains fixed scenery, characters, panels, labels, rows, and footer. Live values and network signs are drawn separately. Existing PNG modules are retained in `dashboard-assets` for future swaps.
+## What changed
+- More vertical room: corrected footer clipping and separated sections
+- Landscape softly blended into header rather than a hard-edged rectangle
+- Sharper server icons loaded from PNG resources
+- Preserves OneBlock/Arcade live players, backend ping, outage state, Discord message updating
+- Shows configured display maxima of 10,000 for network and each backend
 
-`font-atlas.png` is a **fixed-cell technical glyph atlas** with explicit 43×49 pixel cells, 12 columns, ordered by the `FONT_CHARS` constant in the Java renderer. It is a best-effort styled alternative; it is **not an exact extraction of the font from the original artwork**. `icy_pixel_font_atlas_sprite_sheet.png` is also supplied as a visual font reference, but its irregular glyph alignment is not safe for automatic slicing.
+## Build using GitHub Actions
+Upload the **contents** of this project folder to the root of the GitHub repository, preserving `src/main/java/` and `src/main/resources/` paths. Select **Actions -> Build CuboriaStatus -> Run workflow**. Download the plugin JAR from the run's Artifacts.
 
-## Config and installation
-Build with the supplied GitHub Actions workflow (`gradle clean shadowJar`), stop Velocity, replace the JAR in `plugins`, and restart. Your existing server-side `plugins/cuboriastatus/config.properties` retains Discord credentials. Backend identifiers must match Velocity server names (`oneblock`, `arcade`). This JAR copies the new assets to `plugins/cuboriastatus/assets` **only when files do not already exist**. If updating from older versions, replace the `template-base.png`, `sign-online.png`, `sign-offline.png` and `font-atlas.png` files if you want fresh versions.
+## Deploy
+1. Back up your current JAR and `plugins/cuboriastatus/config.properties`.
+2. Stop Velocity and replace the CuboriaStatus JAR with the new build.
+3. Start Velocity. Existing `config.properties` is preserved, not overwritten. Set `servers=oneblock,arcade`, all player maxima to `10000` and `update.seconds=30` in that config.
+4. Do not commit the bot token to GitHub. Keep it in the private Velocity config only.
+5. Watch console for plugin or Discord errors.
 
-New positional overrides use `layout.text.total.x`, `layout.text.total.y`, `layout.text.total.size` and `layout.text.total.max-width`; similarly `network-state`, `server.oneblock.players`, `server.oneblock.ping`, `server.arcade.players`, `server.arcade.ping`, `address` and `interval`. The status sign is selected by proxy-backend availability: at least one backend reachable => ONLINE, none => OFFLINE. A dead proxy cannot update Discord until it starts again.
-
-The 10,000-player maximum is for display only; it does not alter proxy capacity.
+**Notes:** This source was not compiled in this environment. It is intended for the successful GitHub Actions build used previously. Proxy-to-backend pings are not individual player latency. If Velocity stops, this plugin cannot refresh the Discord message until it restarts. The 10,000 figure is dashboard display capacity, not an enforced player limit.
