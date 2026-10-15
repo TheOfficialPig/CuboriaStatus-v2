@@ -38,7 +38,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.6.0", authors = {"Cuboria"})
+@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.7.0", authors = {"Cuboria"})
 public final class CuboriaStatus {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -67,6 +67,15 @@ public final class CuboriaStatus {
                     Files.copy(in, file);
                 }
             }
+            Path artDir=directory.resolve("assets");
+            Files.createDirectories(artDir);
+            String[] arts={"background","logo","character-left","character-right","online","degraded","offline","players","network","header-title","header-players","header-ping","row","footer-address","footer-update","oneblock","arcade"};
+            for(String name:arts){
+                Path target=artDir.resolve(name+".png");
+                if(Files.notExists(target))try(InputStream asset=getClass().getResourceAsStream("/dashboard-assets/"+name+".png")){
+                    if(asset!=null)Files.copy(asset,target);
+                }
+            }
             try (InputStream in = Files.newInputStream(file)) {
                 config.load(in);
             }
@@ -75,7 +84,7 @@ public final class CuboriaStatus {
                     .delay(5, TimeUnit.SECONDS)
                     .repeat(interval, TimeUnit.SECONDS)
                     .schedule();
-            logger.info("CuboriaStatus v0.6.0 started with fixed-composition pixel dashboard.");
+            logger.info("CuboriaStatus v0.7.0 started with independent artwork layers.");
         } catch (Exception ex) {
             logger.error("Unable to initialize CuboriaStatus", ex);
         }
@@ -133,54 +142,118 @@ public final class CuboriaStatus {
                 });
     }
 
+    // Every image is a separate PNG file, copied into plugins/cuboriastatus/assets.
+    // Every slot can be repositioned with layout.<slot>.x/y/w/h in config.properties.
     private byte[] render(List<ServerStat> servers, int totalPlayers) {
-        BufferedImage template = asset("/dashboard-template.png");
-        if (template == null) throw new CompletionException(new IOException("dashboard-template.png missing"));
-        BufferedImage image = new BufferedImage(template.getWidth(), template.getHeight(), BufferedImage.TYPE_INT_RGB);
+        final int W = 1672;
+        final int H = 941;
+        BufferedImage image = new BufferedImage(W,H,BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_OFF);
-        g.drawImage(template, 0, 0, null);
-        Color white = hex("#F4F7FF");
-        Color green = hex("#35F68D");
-        Color red = hex("#FF6677");
-        Color yellow = hex("#FFC95B");
-        Color shadow = hex("#050B1F");
-        int max = maxPlayers("network.max-players", 10000);
-        // Assets are pre-positioned in the template at their original, undistorted proportions.
-        // All variable strings are drawn exclusively into the cleaned live-data regions.
-        drawPixelText(g, totalPlayers + " / " + max, 425, 438, 5, white, shadow, 1);
-        long online = servers.stream().filter(ServerStat::online).count();
-        String state = online == servers.size() && !servers.isEmpty() ? "Operational"
-                : online == 0 ? "Offline" : "Degraded";
-        Color stateColor = state.equals("Operational") ? green : state.equals("Offline") ? red : yellow;
-        drawPixelText(g, state, 1049, 438, 5, stateColor, shadow, 1);
-        for (int i = 0; i < Math.min(servers.size(), 2); i++) {
-            ServerStat server = servers.get(i);
-            int y = i == 0 ? 629 : 708;
-            int serverMax = maxPlayers("server." + server.id() + ".max-players", 10000);
-            drawPixelText(g, server.players() + " / " + serverMax, 989, y, 4, white, shadow, 1);
-            String ping = server.online() ? server.pingMs() + " ms" : "Offline";
-            Color pingColor = !server.online() ? red : server.pingMs() > 80 ? yellow : green;
-            drawPixelText(g, ping, 1310, y, 4, pingColor, shadow, 1);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.setColor(Color.decode("#071327"));g.fillRect(0,0,W,H);
+        place(g,"background",0,0,W,H);
+        g.setColor(new Color(3,12,32,185));g.fillRoundRect(22,20,1628,895,26,26);
+        g.setColor(new Color(41,168,238,170));g.setStroke(new BasicStroke(3));g.drawRoundRect(22,20,1628,895,26,26);
+
+        long up = servers.stream().filter(ServerStat::online).count();
+        String status = servers.isEmpty() || up==0 ? "OFFLINE" : up==servers.size() ? "ONLINE" : "DEGRADED";
+        Color signal = status.equals("ONLINE") ? Color.decode("#31F28D") : status.equals("OFFLINE") ? Color.decode("#FF6276") : Color.decode("#FFCA56");
+        String state = status.equals("ONLINE") ? "Operational" : status.equals("DEGRADED") ? "Degraded" : "Offline";
+
+        // Header layers (never flatten into the underlying background).
+        place(g,"logo",200,40,780,265);
+        place(g,"character-left",44,135,178,178);
+        place(g,"character-right",1140,189,197,148);
+        place(g,status.toLowerCase(java.util.Locale.ROOT),1294,85,335,174);
+        // Draw the state word over the sign to avoid a misleading static ONLINE label.
+        // A panel inset covers the old green label and uses the same pixel font for all states.
+        // Disabled by default for ONLINE, whose source artwork already contains the correct word.
+        if (!status.equals("ONLINE")) {
+            g.setColor(status.equals("OFFLINE") ? new Color(74,21,33,245) : new Color(73,47,20,245));
+            g.fillRoundRect(1436,162,160,45,8,8);
+            drawPixelText(g,status,1444,172,4,signal,Color.decode("#081021"),1);
         }
+        place(g,"players",66,310,734,228);
+        place(g,"network",852,310,754,228);
+        pixelPanelText(g,totalPlayers+" / "+maxPlayers("network.max-players",10000),282,440,5,Color.decode("#F4F8FF"));
+        pixelPanelText(g,state,1093,440,5,signal);
+
+        // Keep headings as live text rather than flattening or horizontally crushing artwork.
+        g.setColor(new Color(12,30,64,240));g.fillRoundRect(104,551,1450,57,12,12);
+        g.setColor(new Color(70,177,241,210));g.setStroke(new BasicStroke(3));g.drawRoundRect(104,551,1450,57,12,12);
+        pixelPanelText(g,"SERVERS",140,565,5,Color.decode("#EAF5FF"));
+        pixelPanelText(g,"PLAYERS",1008,569,4,Color.decode("#EAF5FF"));
+        pixelPanelText(g,"PING",1363,569,4,Color.decode("#EAF5FF"));
+        int n = Math.min(servers.size(),3);
+        for(int i=0;i<n;i++) {
+            ServerStat row = servers.get(i);
+            int y=624+i*83;
+            // Separate row panel geometry and editable contents.
+            g.setColor(new Color(7,26,55,245));g.fillRoundRect(110,y,1450,76,13,13);
+            g.setColor(new Color(41,180,242,225));g.setStroke(new BasicStroke(3));g.drawRoundRect(110,y,1450,76,13,13);
+            g.setColor(new Color(54,95,150,165));g.setStroke(new BasicStroke(2));
+            g.drawLine(989,y+8,989,y+68);g.drawLine(1310,y+8,1310,y+68);
+            Color rowColor = row.online() ? Color.decode("#38F28C") : Color.decode("#FF6276");
+            g.setColor(rowColor);g.fillOval(140,y+26,22,22);
+            String icon = row.id().equalsIgnoreCase("oneblock")?"oneblock":row.id().equalsIgnoreCase("arcade")?"arcade":null;
+            if(icon!=null) place(g,icon,178,y+10,55,55);
+            pixelPanelText(g,row.name(),255,y+22,4,Color.decode("#F3F7FF"));
+            String count=row.players()+" / "+maxPlayers("server."+row.id()+".max-players",10000);
+            pixelPanelText(g,count,1035,y+23,3,Color.decode("#F3F7FF"));
+            String ping=row.online()?row.pingMs()+" ms":"Offline";
+            Color pingColor=!row.online()?Color.decode("#FF6276"):row.pingMs()>80?Color.decode("#FFCA56"):Color.decode("#38F28C");
+            pixelPanelText(g,ping,1370,y+23,3,pingColor);
+        }
+        int footerY=Math.min(850,628+Math.max(2,n)*83+12);
+        g.setColor(new Color(11,34,67,244));g.fillRoundRect(106,footerY,940,88,14,14);
+        g.fillRoundRect(1080,footerY,474,88,14,14);
+        g.setColor(new Color(47,175,240,225));g.setStroke(new BasicStroke(3));
+        g.drawRoundRect(106,footerY,940,88,14,14);g.drawRoundRect(1080,footerY,474,88,14,14);
+        pixelPanelText(g,"SERVER ADDRESS",149,footerY+12,3,Color.decode("#98CDF9"));
+        pixelPanelText(g,config.getProperty("network.address","play.cuborianetwork.net"),149,footerY+48,3,Color.decode("#F4F8FF"));
+        pixelPanelText(g,"UPDATES EVERY "+config.getProperty("update.seconds","30")+"S",1107,footerY+31,3,Color.decode("#EAF5FF"));
         g.dispose();
-        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            ImageIO.write(image, "png", out);
+        try(ByteArrayOutputStream out=new ByteArrayOutputStream()) {
+            if(!ImageIO.write(image,"png",out))throw new IOException("PNG writer unavailable");
             return out.toByteArray();
-        } catch (IOException ex) {
-            throw new CompletionException(ex);
-        }
+        } catch(IOException ex) {throw new CompletionException(ex);}
     }
 
-    private BufferedImage asset(String path) {
+    private void pixelPanelText(Graphics2D g,String value,int x,int y,int scale,Color color){
+        drawPixelText(g,value,x,y,scale,color,Color.decode("#050B1F"),1);
+    }
+    private int slot(String name,String axis,int fallback){
+        try{return Integer.parseInt(config.getProperty("layout."+name+"."+axis,""+fallback));}
+        catch(NumberFormatException e){return fallback;}
+    }
+    private void place(Graphics2D g,String key,int x,int y,int w,int h){
+        x=slot(key,"x",x);y=slot(key,"y",y);w=slot(key,"w",w);h=slot(key,"h",h);
+        BufferedImage src=asset("/dashboard-assets/"+key+".png");
+        if(src==null)return;
+        g.drawImage(src,x,y,w,h,null);
+    }
+    private void drawNineSliceRow(Graphics2D g,String key,int x,int y,int w,int h){
+        x=slot("row","x",x); w=slot("row","w",w);h=slot("row","h",h);
+        BufferedImage src=asset("/dashboard-assets/"+key+".png");
+        if(src==null)return;
+        int left=Math.round(src.getHeight()*.75f);
+        left=Math.min(left,src.getWidth()/4);
+        int right=left;
+        g.drawImage(src,x,y,x+100,y+h,0,0,left,src.getHeight(),null);
+        g.drawImage(src,x+100,y,x+w-100,y+h,left,0,src.getWidth()-right,src.getHeight(),null);
+        g.drawImage(src,x+w-100,y,x+w,y+h,src.getWidth()-right,0,src.getWidth(),src.getHeight(),null);
+    }
+
+    private synchronized BufferedImage asset(String path) {
         return assetCache.computeIfAbsent(path, key -> {
-            try (InputStream in = getClass().getResourceAsStream(key)) {
-                return in == null ? null : ImageIO.read(in);
-            } catch (IOException ex) {
-                logger.warn("Unable to load asset {}", key, ex);
-                return null;
-            }
+            try {
+                Path external=directory.resolve("assets").resolve(Path.of(key).getFileName().toString());
+                if(Files.isRegularFile(external))return ImageIO.read(external.toFile());
+                try(InputStream in=getClass().getResourceAsStream(key)){
+                    return in==null?null:ImageIO.read(in);
+                }
+            } catch(IOException ex){logger.warn("Cannot load artwork {}",key,ex);return null;}
         });
     }
 
