@@ -38,7 +38,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.5.0", authors = {"Cuboria"})
+@Plugin(id = "cuboriastatus", name = "CuboriaStatus", version = "0.6.0", authors = {"Cuboria"})
 public final class CuboriaStatus {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -75,7 +75,7 @@ public final class CuboriaStatus {
                     .delay(5, TimeUnit.SECONDS)
                     .repeat(interval, TimeUnit.SECONDS)
                     .schedule();
-            logger.info("CuboriaStatus v0.5.0 started with asset-based dashboard renderer.");
+            logger.info("CuboriaStatus v0.6.0 started with fixed-composition pixel dashboard.");
         } catch (Exception ex) {
             logger.error("Unable to initialize CuboriaStatus", ex);
         }
@@ -134,125 +134,39 @@ public final class CuboriaStatus {
     }
 
     private byte[] render(List<ServerStat> servers, int totalPlayers) {
-        final int width = 1600;
-        final int rowHeight = 88;
-        final int rows = Math.max(1, servers.size());
-        final int height = 720 + (rows * rowHeight);
-
-        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = img.createGraphics();
+        BufferedImage template = asset("/dashboard-template.png");
+        if (template == null) throw new CompletionException(new IOException("dashboard-template.png missing"));
+        BufferedImage image = new BufferedImage(template.getWidth(), template.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = image.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_OFF);
-
-        Color bg = hex("#07111E");
-        Color overlay = new Color(3, 9, 18, 160);
-        Color white = hex("#F4F8FF");
-        Color ice = hex("#D3E9FF");
-        Color blue = hex("#39C2FF");
-        Color green = hex("#23F0A0");
-        Color yellow = hex("#FFD056");
-        Color red = hex("#FF6B7D");
-        Color shadow = new Color(5, 12, 28, 220);
-
-        g.setColor(bg);
-        g.fillRect(0, 0, width, height);
-
-        BufferedImage landscape = asset("/bg-landscape.png");
-        if (landscape != null) {
-            drawCover(g, landscape, 0, 0, width, height, 0.42f);
+        g.drawImage(template, 0, 0, null);
+        Color white = hex("#F4F7FF");
+        Color green = hex("#35F68D");
+        Color red = hex("#FF6677");
+        Color yellow = hex("#FFC95B");
+        Color shadow = hex("#050B1F");
+        int max = maxPlayers("network.max-players", 10000);
+        // Assets are pre-positioned in the template at their original, undistorted proportions.
+        // All variable strings are drawn exclusively into the cleaned live-data regions.
+        drawPixelText(g, totalPlayers + " / " + max, 425, 438, 5, white, shadow, 1);
+        long online = servers.stream().filter(ServerStat::online).count();
+        String state = online == servers.size() && !servers.isEmpty() ? "Operational"
+                : online == 0 ? "Offline" : "Degraded";
+        Color stateColor = state.equals("Operational") ? green : state.equals("Offline") ? red : yellow;
+        drawPixelText(g, state, 1049, 438, 5, stateColor, shadow, 1);
+        for (int i = 0; i < Math.min(servers.size(), 2); i++) {
+            ServerStat server = servers.get(i);
+            int y = i == 0 ? 629 : 708;
+            int serverMax = maxPlayers("server." + server.id() + ".max-players", 10000);
+            drawPixelText(g, server.players() + " / " + serverMax, 989, y, 4, white, shadow, 1);
+            String ping = server.online() ? server.pingMs() + " ms" : "Offline";
+            Color pingColor = !server.online() ? red : server.pingMs() > 80 ? yellow : green;
+            drawPixelText(g, ping, 1310, y, 4, pingColor, shadow, 1);
         }
-        g.setColor(overlay);
-        g.fillRect(0, 0, width, height);
-
-        // Soft outer frame
-        for (int i = 0; i < 7; i++) {
-            g.setColor(new Color(0, 175, 255, 16 - i * 2));
-            g.drawRoundRect(24 + i, 20 + i, width - 48 - i * 2, height - 40 - i * 2, 34, 34);
-        }
-        g.setColor(new Color(0, 120, 255, 90));
-        g.drawRoundRect(32, 28, width - 64, height - 56, 30, 30);
-
-        // Header assets
-        BufferedImage badge = asset("/title-badge.png");
-        BufferedImage onlineSign = asset("/online-sign.png");
-        BufferedImage totalPanel = asset("/panel-total.png");
-        BufferedImage networkPanel = asset("/panel-network.png");
-        BufferedImage headerServers = asset("/header-servers.png");
-        BufferedImage serverRow = asset("/row-server.png");
-        BufferedImage footerPanels = asset("/footer-panels.png");
-        BufferedImage leftChar = asset("/char-left.png");
-        BufferedImage rightChar = asset("/char-right.png");
-
-        int headerTop = 34;
-        drawImage(g, badge, 170, headerTop + 4, 860, 286, 1f);
-        drawImage(g, onlineSign, 1140, headerTop + 28, 330, 165, 1f);
-        drawImage(g, leftChar, 56, 62, 180, 180, 1f);
-        drawImage(g, rightChar, 1300, 86, 190, 142, 1f);
-
-        long onlineCount = servers.stream().filter(ServerStat::online).count();
-        boolean allOnline = !servers.isEmpty() && onlineCount == servers.size();
-        String overallText = allOnline ? "OPERATIONAL" : (onlineCount == 0 ? "OFFLINE" : "DEGRADED");
-        Color overallColor = allOnline ? green : (onlineCount == 0 ? red : yellow);
-
-        // Summary panels
-        int summaryY = 248;
-        drawImage(g, totalPanel, 74, summaryY, 660, 220, 1f);
-        drawImage(g, networkPanel, 846, summaryY, 680, 220, 1f);
-
-        int networkMax = maxPlayers("network.max-players", 10000);
-        // Total live number
-        drawPixelText(g, String.valueOf(totalPlayers), 255, summaryY + 112, 8, white, shadow, 2);
-        int totalWidth = pixelTextWidth(String.valueOf(totalPlayers), 8, 2);
-        drawPixelText(g, "/", 255 + totalWidth + 18, summaryY + 118, 6, ice, shadow, 1);
-        drawPixelText(g, String.valueOf(networkMax), 255 + totalWidth + 58, summaryY + 118, 6, ice, shadow, 1);
-
-        // Network status live text
-        int statusScale = overallText.length() > 10 ? 5 : 6;
-        drawPixelText(g, overallText, 1035, summaryY + 116, statusScale, overallColor, shadow, 2);
-
-        // Servers header
-        int listHeaderY = summaryY + 232;
-        drawImage(g, headerServers, 86, listHeaderY, 1425, 102, 1f);
-
-        // Server rows
-        int rowsY = listHeaderY + 78;
-        for (int i = 0; i < servers.size(); i++) {
-            ServerStat stat = servers.get(i);
-            int y = rowsY + i * rowHeight;
-            drawImage(g, serverRow, 90, y, 1410, 92, 1f);
-
-            BufferedImage icon = switch (stat.id().toLowerCase(Locale.ROOT)) {
-                case "oneblock" -> asset("/oneblock-icon.png");
-                case "arcade" -> asset("/arcade-icon.png");
-                default -> null;
-            };
-            if (icon != null) {
-                drawImage(g, icon, 200, y + 23, 46, 46, 1f);
-            }
-
-            Color nameColor = stat.online() ? white : hex("#FFD7DE");
-            drawPixelText(g, stat.name(), 272, y + 28, 5, nameColor, shadow, 1);
-
-            String playersText = stat.players() + " / " + maxPlayers("server." + stat.id() + ".max-players", networkMax);
-            drawPixelText(g, playersText, 982, y + 30, 4, white, shadow, 1);
-
-            String pingText = stat.online() ? stat.pingMs() + " ms" : "Offline";
-            Color pingColor = !stat.online() ? red : (stat.pingMs() <= 80 ? green : yellow);
-            int pingScale = stat.online() ? 4 : 4;
-            int pingWidth = pixelTextWidth(pingText, pingScale, 1);
-            drawPixelText(g, pingText, 1430 - pingWidth, y + 30, pingScale, pingColor, shadow, 1);
-        }
-
-        // Footer
-        int footerY = rowsY + rows * rowHeight + 28;
-        drawImage(g, footerPanels, 86, footerY, 1425, 95, 1f);
-        drawPixelText(g, config.getProperty("network.address", "play.cuborianetwork.net"), 270, footerY + 34, 4, white, shadow, 1);
-
         g.dispose();
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            ImageIO.write(img, "png", out);
+            ImageIO.write(image, "png", out);
             return out.toByteArray();
         } catch (IOException ex) {
             throw new CompletionException(ex);

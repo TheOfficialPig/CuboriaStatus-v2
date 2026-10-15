@@ -1,56 +1,12 @@
-# CuboriaStatus v0.5.0
+# CuboriaStatus v0.6.0 — fixed-layout pixel dashboard
 
-Asset-based Discord server status image plugin for **Velocity**.
-
-## What changed in v0.5.0
-- Uses the new Mineclub-style art assets.
-- Uses a built-in pixel live-text renderer so player counts, ping, status text, and server address match the image style much better.
-- Keeps live data for:
-  - total proxy player count
-  - backend online/offline state
-  - backend player counts
-  - backend ping from proxy to backend
-  - server address
-- Discord message is edited in place after the first post.
+This build uses the approved status dashboard artwork at its native 1672x941 size. It does not stretch the separate UI panels. Only the live player counts, health label and two backend pings are drawn over the reserved numeric areas.
 
 ## Build
-Use GitHub Actions or Gradle:
+Run `gradle clean shadowJar --no-daemon` or use the included GitHub Actions workflow. Upload the JAR from `build/libs` into your Velocity proxy's `plugins/` folder.
 
-```bash
-gradle clean shadowJar
-```
+## Config
+Keep your existing `plugins/cuboriastatus/config.properties` (with your bot token and channel ID); it is not overwritten. The intended backend IDs are `oneblock,arcade`, with all displayed maximums set to 10000. This dashboard layout is fixed to those two backends. Its footer address is currently part of the approved background art.
 
-Final jar:
-
-```text
-build/libs/CuboriaStatus-0.5.0.jar
-```
-
-## Install
-1. Put the jar in your Velocity `plugins/` folder.
-2. Start the proxy once.
-3. Edit:
-
-```text
-plugins/cuboriastatus/config.properties
-```
-
-4. Set your Discord bot token and channel ID.
-5. Restart Velocity.
-
-## Default server config
-```properties
-servers=oneblock,arcade
-server.oneblock=OneBlock
-server.oneblock.max-players=10000
-server.arcade=Arcade
-server.arcade.max-players=10000
-network.max-players=10000
-network.address=play.cuborianetwork.net
-update.seconds=30
-```
-
-## Notes
-- This plugin reads the backend servers by **Velocity server ID**, not by forced hosts.
-- `network.max-players` and `server.<id>.max-players` are **display values only**.
-- If you delete the Discord status message, the plugin will recreate it on the next update cycle.
+## Limitations
+This is source code for a release candidate, not a compiled or tested JAR. A green ONLINE sign is part of the background illustration, while the actual live network status is rendered in the Network Status field. The customized mock-up uses artwork as a static template, not independently editable vector paths.
